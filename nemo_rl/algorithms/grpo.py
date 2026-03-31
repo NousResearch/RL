@@ -122,14 +122,17 @@ class AsyncGRPOConfig(TypedDict):
 
 
 class AdvEstimatorConfig(TypedDict):
-    """Configuration for advantage estimator (GRPO, GDPO, or Reinforce++)."""
+    """Configuration for advantage estimator (GRPO, GDPO, Reinforce++, or Entropic)."""
 
-    name: str  # "grpo", "gdpo", or "reinforce_plus_plus"
+    name: str  # "grpo", "gdpo", "reinforce_plus_plus", or "entropic_adaptive_beta"
     # GRPO specific
     normalize_rewards: NotRequired[bool]
     use_leave_one_out_baseline: NotRequired[bool]
     # Reinforce++ specific
     minus_baseline: NotRequired[bool]
+    # Entropic Adaptive-Beta specific (TTT-Discover, arXiv:2601.16175)
+    gamma: NotRequired[float]  # Target KL for beta search; default ln(2)
+    eps: NotRequired[float]  # Numerical stability; default 1e-8
 
 
 class GRPOConfig(TypedDict):
@@ -1066,6 +1069,14 @@ def _create_advantage_estimator(master_config: MasterConfig):
             adv_estimator_config, loss_config
         )
         print("  ✓ Using Reinforce++ advantage estimator")
+    elif adv_estimator_name == "entropic_adaptive_beta":
+        from nemo_rl.algorithms.entropic_advantage_estimator import (
+            EntropicAdaptiveBetaAdvantageEstimator,
+        )
+        adv_estimator = EntropicAdaptiveBetaAdvantageEstimator(
+            adv_estimator_config, loss_config
+        )
+        print("  ✓ Using Entropic Adaptive-Beta advantage estimator (TTT-Discover)")
     else:
         raise ValueError(f"Invalid adv_estimator name: {adv_estimator_name}")
 
