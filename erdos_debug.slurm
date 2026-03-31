@@ -24,7 +24,7 @@ echo "Job ID: $SLURM_JOB_ID"
 cd /home/mormio/RL
 
 echo "Starting TTT-Discover GRPO debug training (inline mode)..."
-uv run python examples/run_discover.py \
+PATH=$HOME/.local/bin:$PATH uv run python examples/run_discover.py --config \
     examples/configs/grpo_erdos_discover_debug.yaml
 
 echo "Training complete"

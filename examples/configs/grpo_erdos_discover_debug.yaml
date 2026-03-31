@@ -1,9 +1,7 @@
-# TTT-Discover DEBUG config — small model, short runs, inline reward (no Gym server).
-#
-# Usage:
-#   cd ~/RL && uv run python examples/run_discover.py examples/configs/grpo_erdos_discover_debug.yaml
-
-seed: 42
+# TTT-Discover DEBUG config.
+# Inherits from grpo_math_1B.yaml for all defaults.
+# Overrides: entropic advantages, inline reward, small batch, 5 steps.
+defaults: "grpo_math_1B.yaml"
 
 grpo:
   num_prompts_per_step: 4
@@ -20,18 +18,17 @@ loss_fn:
   kl_penalty_coef: 0.1
   ratio_clip: 0.2
   token_level_loss: false
-  importance_sampling: true
 
 policy:
-  model_name: "/home/shared/models/Qwen3-1.7B"
-  tokenizer: "/home/shared/models/Qwen3-1.7B"
+  model_name: "Qwen/Qwen2.5-1.5B-Instruct"
   max_total_sequence_length: 4096
   train_global_batch_size: 32
   train_micro_batch_size: 4
 
   dtensor_cfg:
     enabled: true
-    tensor_parallel_size: 1
+    cpu_offload: true
+    activation_checkpointing: true
     sequence_parallel: false
 
   lora_cfg:
@@ -40,40 +37,42 @@ policy:
     alpha: 1.0
     dropout: 0.0
 
+  generation:
+    backend: "vllm"
+    max_new_tokens: 2048
+    temperature: 1.0
+    top_p: 1.0
+    stop_token_ids: null
+    stop_strings: null
+    vllm_cfg:
+      async_engine: false
+      tensor_parallel_size: 1
+      pipeline_parallel_size: 1
+      expert_parallel_size: 1
+      gpu_memory_utilization: 0.6
+      max_model_len: ${policy.max_total_sequence_length}
+
 optimizer:
   name: adamw
   lr: 1.0e-4
-  betas: [0.9, 0.999]
-  weight_decay: 0.01
-  scheduler:
-    name: cosine
-    warmup_steps: 1
-    min_lr_ratio: 0.1
 
 data:
   shuffle: false
 
 env:
   erdos_discovery:
-    resource_server_url: "inline"    # No Gym server — compute reward in-process
+    resource_server_url: "inline"
     num_initial_states: 8
     num_groups_per_step: 4
     sandbox_timeout: 60
     request_timeout: 120
 
-cluster:
-  gpus_per_node: 8
-  num_nodes: 1
-
-generation:
-  backend: vllm
-  colocated: true
-  temperature: 1.0
-  top_p: 1.0
-  max_new_tokens: 2048
-
 checkpointing:
   enabled: false
 
-wandb:
-  enabled: false
+logger:
+  log_dir: "logs/erdos-debug"
+  wandb_enabled: false
+  tensorboard_enabled: false
+  mlflow_enabled: false
+  swanlab_enabled: false

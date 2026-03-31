@@ -14,7 +14,10 @@ Reference: "Learning to Discover at Test Time" (arXiv:2601.16175)
 """
 
 import itertools
+import argparse
+import itertools
 import logging
+import os
 import sys
 from typing import Optional
 
@@ -33,6 +36,7 @@ from nemo_rl.environments.erdos_discovery_environment import (
     ErdosDiscoveryEnvironment,
 )
 from nemo_rl.models.generation import configure_generation_config
+from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
 
 logger = logging.getLogger(__name__)
 
@@ -265,63 +269,79 @@ def setup_discover_data(config: MasterConfig, tokenizer):
 
 
 def main():
-    import yaml
-    from pathlib import Path
+    import os
+    from omegaconf import OmegaConf
+    from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
 
-    # Load config
-    config_path = sys.argv[1] if len(sys.argv) > 1 else str(
-        Path(__file__).parent / "configs" / "grpo_erdos_discover.yaml"
-    )
+    register_omegaconf_resolvers()
 
-    if config_path.startswith("--config="):
-        config_path = config_path.split("=", 1)[1]
-    elif config_path == "--config" and len(sys.argv) > 2:
-        config_path = sys.argv[2]
+    # Parse --config argument
+    config_path = None
+    for i, arg in enumerate(sys.argv[1:], 1):
+        if arg.startswith("--config="):
+            config_path = arg.split("=", 1)[1]
+        elif arg == "--config" and i < len(sys.argv) - 1:
+            config_path = sys.argv[i + 1]
+        elif not arg.startswith("--") and config_path is None:
+            config_path = arg
+
+    if config_path is None:
+        config_path = os.path.join(
+            os.path.dirname(__file__), "configs", "grpo_erdos_discover_debug.yaml"
+        )
 
     print(f"Loading config from: {config_path}")
-    with open(config_path) as f:
-        config: MasterConfig = yaml.safe_load(f)
+    config = load_config(config_path)
+
+    # Resolve OmegaConf interpolations (e.g. ${policy.model_name})
+    oc = OmegaConf.create(config)
+    config = OmegaConf.to_container(oc, resolve=True)
 
     # Initialize Ray
-    init_ray(config)
+    init_ray()
     set_seed(config.get("seed", 42))
 
     # Tokenizer
     tokenizer = get_tokenizer(config["policy"]["tokenizer"])
 
     # Generation config
-    configure_generation_config(config)
+    config["policy"]["generation"] = configure_generation_config(
+        config["policy"]["generation"], tokenizer
+    )
 
     # Setup data + environment
     train_dataset, val_dataset, task_to_env, val_task_to_env = (
         setup_discover_data(config, tokenizer)
     )
 
-    # Setup policy, generation backend, cluster, etc.
+    # Setup policy, generation, cluster, dataloader, etc.
     (
-        cluster,
         policy,
-        generation,
-        train_dataloader,
+        policy_generation,
+        clusters,
+        dataloader,
         val_dataloader,
-    ) = setup(
-        config=config,
-        tokenizer=tokenizer,
-        train_dataset=train_dataset,
-        val_dataset=val_dataset,
-    )
+        loss_fn,
+        nemo_logger,
+        checkpointer,
+        grpo_state,
+        master_config,
+    ) = setup(config, tokenizer, train_dataset, val_dataset)
 
     # Run GRPO training
     grpo_train(
-        master_config=config,
-        policy=policy,
-        generation=generation,
-        cluster=cluster,
-        wrapped_dataloader=train_dataloader,
-        val_wrapped_dataloader=val_dataloader,
-        task_to_env=task_to_env,
-        val_task_to_env=val_task_to_env,
-        tokenizer=tokenizer,
+        policy,
+        policy_generation,
+        dataloader,
+        val_dataloader,
+        tokenizer,
+        loss_fn,
+        task_to_env,
+        val_task_to_env,
+        nemo_logger,
+        checkpointer,
+        grpo_state,
+        master_config,
     )
 
 
