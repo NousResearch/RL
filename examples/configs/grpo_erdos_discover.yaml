@@ -1,0 +1,87 @@
+# TTT-Discover GRPO config for Erdős Minimum Overlap Problem.
+# Reference: arXiv:2601.16175
+#
+# Usage:
+#   uv run python examples/run_discover.py --config examples/configs/grpo_erdos_discover.yaml
+#
+# Requires the Gym Erdős resource server running separately:
+#   cd ~/Gym && ng_run "+config_paths=[resources_servers/erdos_discovery/configs/erdos_discovery.yaml]"
+
+seed: 42
+
+grpo:
+  num_prompts_per_step: 8        # PUCT selects 8 states per step
+  num_generations_per_prompt: 64  # 64 rollouts per state = 512 total
+  max_num_epochs: 1
+  max_num_steps: 50              # 50 training steps (paper default)
+  max_rollout_turns: 1           # Single-turn: generate code, get reward
+  remove_constant_reward_groups: true
+  adv_estimator:
+    name: entropic_adaptive_beta
+    gamma: 0.6931471805599453    # ln(2)
+
+loss_fn:
+  kl_penalty_coef: 0.1           # KL penalty (paper uses 0.1)
+  ratio_clip: 0.2
+  token_level_loss: false         # Sequence-level policy ratio
+  importance_sampling: true
+
+policy:
+  model_name: "gpt-oss-120b-bf16"
+  tokenizer: "gpt-oss-120b-bf16"
+  max_total_sequence_length: 32768
+  train_global_batch_size: 512   # 8 groups × 64 rollouts
+  train_micro_batch_size: 4
+
+  dtensor_cfg:
+    enabled: true
+    tensor_parallel_size: 1
+    sequence_parallel: false
+
+  lora_cfg:
+    enabled: true
+    rank: 32
+    alpha: 1.0
+    dropout: 0.0
+
+optimizer:
+  name: adamw
+  lr: 4.0e-5
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  scheduler:
+    name: cosine
+    warmup_steps: 2
+    min_lr_ratio: 0.1
+
+data:
+  shuffle: false                  # PUCT handles selection order
+  # No static dataset — DiscoverDataset generates prompts dynamically
+
+env:
+  erdos_discovery:
+    resource_server_url: "http://localhost:8080"
+    num_initial_states: 16
+    num_groups_per_step: 8
+    sandbox_timeout: 600
+    request_timeout: 660
+
+cluster:
+  gpus_per_node: 8
+  num_nodes: 2                   # 2 training nodes
+
+generation:
+  backend: vllm
+  colocated: false               # Inference on separate nodes
+  temperature: 1.0
+  top_p: 1.0
+  max_new_tokens: 16384          # Long context for code generation
+
+checkpointing:
+  enabled: true
+  checkpoint_dir: "results/ttt-discover-erdos"
+  save_frequency: 5              # Every 5 steps
+
+wandb:
+  enabled: true
+  project: "ttt-discover-erdos"
