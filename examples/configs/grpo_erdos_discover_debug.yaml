@@ -1,19 +1,15 @@
-# TTT-Discover DEBUG config — small model, short runs, verify plumbing.
+# TTT-Discover DEBUG config — small model, short runs, inline reward (no Gym server).
 #
 # Usage:
-#   # Terminal 1: Start Gym resource server
-#   cd ~/Gym && ng_run "+config_paths=[resources_servers/erdos_discovery/configs/erdos_discovery.yaml]"
-#
-#   # Terminal 2: Run debug training
 #   cd ~/RL && uv run python examples/run_discover.py examples/configs/grpo_erdos_discover_debug.yaml
 
 seed: 42
 
 grpo:
-  num_prompts_per_step: 4        # 4 states per step (small batch)
-  num_generations_per_prompt: 8  # 8 rollouts per state = 32 total
+  num_prompts_per_step: 4
+  num_generations_per_prompt: 8
   max_num_epochs: 1
-  max_num_steps: 5               # Just 5 steps to verify pipeline
+  max_num_steps: 5
   max_rollout_turns: 1
   remove_constant_reward_groups: true
   adv_estimator:
@@ -30,7 +26,7 @@ policy:
   model_name: "/home/shared/models/Qwen3-1.7B"
   tokenizer: "/home/shared/models/Qwen3-1.7B"
   max_total_sequence_length: 4096
-  train_global_batch_size: 32    # 4 groups × 8 rollouts
+  train_global_batch_size: 32
   train_micro_batch_size: 4
 
   dtensor_cfg:
@@ -59,25 +55,25 @@ data:
 
 env:
   erdos_discovery:
-    resource_server_url: "http://localhost:8080"
+    resource_server_url: "inline"    # No Gym server — compute reward in-process
     num_initial_states: 8
     num_groups_per_step: 4
-    sandbox_timeout: 60         # Shorter timeout for debug
+    sandbox_timeout: 60
     request_timeout: 120
 
 cluster:
   gpus_per_node: 8
-  num_nodes: 1                  # Single node for debug
+  num_nodes: 1
 
 generation:
   backend: vllm
-  colocated: true               # Colocated on same GPUs for debug
+  colocated: true
   temperature: 1.0
   top_p: 1.0
-  max_new_tokens: 2048          # Shorter for debug
+  max_new_tokens: 2048
 
 checkpointing:
-  enabled: false                # No checkpointing for debug
+  enabled: false
 
 wandb:
-  enabled: false                # No wandb for debug
+  enabled: false

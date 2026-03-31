@@ -25,6 +25,97 @@ from nemo_rl.environments.interfaces import EnvironmentInterface, EnvironmentRet
 
 logger = logging.getLogger(__name__)
 
+
+# ═══════════════════════════════════════════════════════════════════
+# Inline reward computation (no Gym server needed for debug/testing)
+# ═══════════════════════════════════════════════════════════════════
+
+def _inline_compute_reward(response_text: str, timeout: int = 60) -> dict:
+    """Compute reward directly in-process. No HTTP call needed."""
+    import re
+    import signal
+    import builtins
+    import math as _math
+    import itertools as _itertools
+    import functools as _functools
+    import collections as _collections
+
+    import numpy as _np
+    from numpy.fft import rfft, irfft
+
+    _ALLOWED_MODULES = frozenset({
+        "numpy", "np", "math", "cmath", "random",
+        "itertools", "functools", "collections", "fractions", "decimal",
+    })
+    _SAFE_BUILTIN_NAMES = [
+        "abs", "all", "any", "bool", "dict", "divmod", "enumerate",
+        "filter", "float", "format", "int", "isinstance", "issubclass",
+        "iter", "len", "list", "map", "max", "min", "next", "object",
+        "print", "range", "repr", "reversed", "round", "set", "slice",
+        "sorted", "str", "sum", "tuple", "type", "zip",
+        "Exception", "ValueError", "TypeError", "KeyError", "IndexError",
+        "StopIteration", "RuntimeError", "NotImplementedError",
+        "OverflowError", "ZeroDivisionError", "AttributeError",
+    ]
+
+    # Extract code
+    code_re = re.compile(r"```(?:python)?\s*\n(.*?)```", re.DOTALL)
+    blocks = code_re.findall(response_text)
+    code = blocks[-1].strip() if blocks else response_text.strip()
+
+    # Build sandbox
+    import random as _random
+    safe_builtins = {k: getattr(builtins, k) for k in _SAFE_BUILTIN_NAMES if hasattr(builtins, k)}
+    def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name.split(".")[0] not in _ALLOWED_MODULES:
+            raise ImportError(f"Module '{name}' not allowed")
+        return builtins.__import__(name, globals, locals, fromlist, level)
+    safe_builtins["__import__"] = _safe_import
+    namespace = {
+        "__builtins__": safe_builtins,
+        "np": _np, "numpy": _np, "math": _math, "random": _random,
+        "itertools": _itertools, "functools": _functools, "collections": _collections,
+    }
+
+    try:
+        class _Timeout(Exception):
+            pass
+        def _handler(s, f):
+            raise _Timeout()
+        old = signal.signal(signal.SIGALRM, _handler)
+        signal.alarm(timeout)
+        try:
+            exec(compile(code, "<llm>", "exec"), namespace)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old)
+
+        if "f" not in namespace:
+            return {"reward": 0.0, "bound": None, "error_msg": "no variable f"}
+
+        f = _np.asarray(namespace["f"], dtype=float).flatten()
+
+        # Validate
+        if len(f) < 1 or len(f) > 1000:
+            return {"reward": 0.0, "bound": None, "error_msg": "bad length"}
+        if _np.any(~_np.isfinite(f)) or _np.any(f < 0) or _np.any(f > 1):
+            return {"reward": 0.0, "bound": None, "error_msg": "bad values"}
+        if abs(float(_np.mean(f)) - 0.5) > 1e-3:
+            return {"reward": 0.0, "bound": None, "error_msg": "bad mean"}
+
+        # Compute bound
+        n = len(f)
+        F = rfft(f, n=2*n)
+        autocorr = irfft(F * _np.conj(F), n=2*n)
+        bound = float(2 * n * _np.max(autocorr.real) / (_np.sum(f)**2))
+
+        if bound <= 0 or not _math.isfinite(bound):
+            return {"reward": 0.0, "bound": None, "error_msg": "bad bound"}
+        return {"reward": 1.0 / bound, "bound": bound, "error_msg": ""}
+
+    except Exception as e:
+        return {"reward": 0.0, "bound": None, "error_msg": str(e)[:200]}
+
 # Type alias matching NeMo RL's convention
 LLMMessageLogType = list[dict[str, Any]]
 ErdosMetadata = dict[str, Any]
@@ -63,6 +154,10 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface[ErdosMetadata]):
         self.total_verified = 0
         self.total_valid = 0
         self._session_initialized = False
+        self._inline_mode = (self.resource_server_url == "inline")
+        if self._inline_mode:
+            logger.info("ErdosDiscovery: running in INLINE mode (no Gym server)")
+            self._session_initialized = True  # No server to init
 
     async def _ensure_session(self):
         """Initialize the PUCT buffer on the resource server if not done."""
@@ -96,11 +191,15 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface[ErdosMetadata]):
 
     async def _verify_single(
         self,
-        session: aiohttp.ClientSession,
+        session: Optional[aiohttp.ClientSession],
         response_text: str,
         parent_state: Optional[list[float]] = None,
     ) -> dict:
-        """Call /verify on the resource server for one response."""
+        """Call /verify on the resource server, or compute inline."""
+        if self._inline_mode:
+            return _inline_compute_reward(
+                response_text, timeout=self.sandbox_timeout
+            )
         # Build a minimal NeMoGymResponse-like payload
         # The resource server extracts output_text from response.output_text
         body = {
@@ -163,10 +262,14 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface[ErdosMetadata]):
         answers = [None] * batch_size
         updated_metadata = list(metadata)
 
-        timeout = aiohttp.ClientTimeout(total=self.request_timeout)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            import asyncio
+        if self._inline_mode:
+            session = None
+        else:
+            session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.request_timeout)
+            )
 
+        try:
             tasks = []
             for i, message_log in enumerate(message_log_batch):
                 # Extract the last assistant message
@@ -186,6 +289,9 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface[ErdosMetadata]):
                 )
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            if session is not None:
+                await session.close()
 
         for i, result in enumerate(results):
             if isinstance(result, Exception):
