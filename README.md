@@ -104,6 +104,8 @@ For detailed information on backend selection, configuration, and examples, see 
 - ✅ **Environment Support and Isolation** - Support for multi-environment training and dependency isolation between components.
 - ✅ **Worker Isolation** - Process isolation between RL Actors (no worries about global state).
 - ✅ **Learning Algorithms** - GRPO/GSPO/DAPO, SFT(with LoRA), DPO, and On-policy distillation.
+- ✅ **Advantage Estimators** - Group-relative (GRPO), multi-reward (GDPO), Reinforce++, and [Entropic Adaptive-β](nemo_rl/algorithms/entropic_advantage_estimator.py) (LOO entropic weighting from [TTT-Discover](https://arxiv.org/abs/2601.16175)).
+- ✅ **PUCT Buffer** - [Tree-structured state selection](nemo_rl/utils/puct_buffer.py) for iterative optimization environments (exploration/exploitation via Upper Confidence bounds).
 - ✅ **Multi-Turn RL** - Multi-turn generation and training for RL with tool use, games, etc.
 - ✅ **Advanced Parallelism with DTensor** - PyTorch FSDP2, TP, CP, and SP for efficient training (through NeMo AutoModel).
 - ✅ **Larger Model Support with Longer Sequences** - Performant parallelisms with Megatron Core (TP/PP/CP/SP/EP/FSDP) (through NeMo Megatron Bridge). 
