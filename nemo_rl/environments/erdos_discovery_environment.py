@@ -491,7 +491,20 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
         answers = [None] * batch_size
         updated_metadata = list(metadata)
 
+        import time as _time
+        _t0 = _time.time()
+        logger.info(f"[{_time.strftime('%H:%M:%S')}] Starting reward computation for {batch_size} rollouts")
+
         for i, message_log in enumerate(message_log_batch):
+            if i > 0 and i % 50 == 0:
+                elapsed = _time.time() - _t0
+                rate = i / elapsed if elapsed > 0 else 0
+                eta = (batch_size - i) / rate if rate > 0 else 0
+                logger.info(
+                    f"[{_time.strftime('%H:%M:%S')}] Reward progress: {i}/{batch_size} "
+                    f"({elapsed:.0f}s elapsed, {rate:.1f} it/s, ~{eta:.0f}s remaining)"
+                )
+
             # Extract assistant response
             response_text = ""
             for msg in reversed(message_log):
@@ -540,6 +553,14 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
                     "result_construction": result.get("result_construction"),
                     "n_points": result.get("n_points"),
                 }
+
+        elapsed = _time.time() - _t0
+        valid = sum(1 for r in rewards if r > 0)
+        max_r = float(rewards.max()) if len(rewards) > 0 else 0.0
+        logger.info(
+            f"[{_time.strftime('%H:%M:%S')}] Reward computation done: {batch_size} rollouts in {elapsed:.1f}s "
+            f"({valid} valid, max_reward={max_r:.4f})"
+        )
 
         return EnvironmentReturn(
             observations=observations,
