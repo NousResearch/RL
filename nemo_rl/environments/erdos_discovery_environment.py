@@ -266,7 +266,7 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface[ErdosMetadata]):
         batch_size = len(message_log_batch)
         rewards = torch.zeros(batch_size)
         terminateds = torch.ones(batch_size)
-        observations = [{}] * batch_size
+        observations = [{"role": "user", "content": ""} for _ in range(batch_size)]
         answers = [None] * batch_size
         updated_metadata = list(metadata)
 
@@ -323,7 +323,7 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface[ErdosMetadata]):
         batch_size = len(message_log_batch)
         rewards = torch.zeros(batch_size)
         terminateds = torch.ones(batch_size)  # Always single-turn
-        observations = [{}] * batch_size
+        observations = [{"role": "user", "content": ""} for _ in range(batch_size)]
         answers = [None] * batch_size
         updated_metadata = list(metadata)
 
