@@ -1,7 +1,5 @@
 #!/bin/bash
-# TTT-Discover Erdős — Nemotron-3-Super-120B on 8 nodes
-# 2 nodes inference (vLLM TP=8), 6 nodes training (Megatron TP=4 EP=8)
-# Based on Dakota's working run_super_grpo.sh
+# TTT-Discover Erdős — Nemotron-3-Super-120B, 8k seq len, wandb logging
 set -euo pipefail
 cd /home/mormio/RL
 
@@ -10,6 +8,7 @@ MODEL_PATH="/home/shared/models/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16"
 EXP="results/erdos-120b-$(date +%Y%m%d_%H%M)"
 mkdir -p "$EXP"
 
+WANDB_API_KEY=$(grep 'password' ~/.netrc | head -1 | awk '{print $2}')
 MOUNTS="$PWD:$PWD,$MODEL_PATH:$MODEL_PATH,$HOME/.cache:$HOME/.cache"
 
 COMMAND="
@@ -27,8 +26,8 @@ export UCX_NET_DEVICES=bond0 && \
 export HF_HUB_ENABLE_HF_TRANSFER=0 && \
 export TORCH_CUDA_ARCH_LIST='9.0 10.0' && \
 export NRL_IGNORE_VERSION_MISMATCH=1 && \
+export WANDB_API_KEY=$WANDB_API_KEY && \
 
-# Copy our custom files into the container's /opt/nemo-rl
 SRC=/home/mormio/RL
 cp \$SRC/nemo_rl/algorithms/entropic_advantage_estimator.py /opt/nemo-rl/nemo_rl/algorithms/
 cp \$SRC/nemo_rl/environments/erdos_discovery_environment.py /opt/nemo-rl/nemo_rl/environments/
@@ -36,7 +35,6 @@ cp \$SRC/nemo_rl/utils/puct_buffer.py /opt/nemo-rl/nemo_rl/utils/
 cp \$SRC/examples/run_discover.py /opt/nemo-rl/examples/
 cp \$SRC/examples/configs/grpo_erdos_discover.yaml /opt/nemo-rl/examples/configs/
 
-# Patch grpo.py to register entropic estimator
 python -c \"
 path = '/opt/nemo-rl/nemo_rl/algorithms/grpo.py'
 with open(path) as f:
@@ -61,7 +59,6 @@ if 'entropic_adaptive_beta' not in content:
     print('Patched grpo.py')
 \" && \
 
-# Patch utils.py to register erdos_discovery env
 python -c \"
 path = '/opt/nemo-rl/nemo_rl/environments/utils.py'
 with open(path) as f:
@@ -80,10 +77,11 @@ python examples/run_discover.py \
   --config examples/configs/grpo_erdos_discover.yaml
 "
 
-echo "Submitting Erdős TTT-Discover 120B..."
+echo "Submitting Erdős TTT-Discover 120B (8k seq, wandb)..."
 echo "  Container: $CONTAINER"
 echo "  Model:     $MODEL_PATH"
 echo "  Nodes:     8 (2 inference + 6 training)"
+echo "  Seq len:   8192"
 echo "  Exp:       $EXP"
 
 COMMAND="$COMMAND" \
@@ -99,3 +97,4 @@ sbatch \
   ray.sub
 
 echo "Logs: $EXP/"
+echo "W&B: https://wandb.ai/nous_research/ttt-discover-erdos"

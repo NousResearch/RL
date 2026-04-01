@@ -531,12 +531,30 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
         }
 
         # Count valid solutions in this batch
-        batch_valid = sum(1 for m in metadata if m.get("reward", 0) > 0)
+        batch_rewards = [m.get("reward", 0.0) for m in metadata]
+        batch_valid = sum(1 for r in batch_rewards if r > 0)
         batch_c5s = [m.get("c5_bound") for m in metadata if m.get("c5_bound") is not None]
+
+        metrics["erdos/max_reward"] = float(max(batch_rewards)) if batch_rewards else 0.0
+        metrics["erdos/avg_reward"] = float(sum(batch_rewards) / max(1, len(batch_rewards)))
+        metrics["erdos/valid_count"] = float(batch_valid)
+        metrics["erdos/valid_rate"] = float(batch_valid / max(1, len(batch_rewards)))
+        metrics["erdos/batch_size"] = float(len(metadata))
+
         if batch_c5s:
-            metrics["batch_best_c5"] = min(batch_c5s)
-            metrics["batch_mean_c5"] = sum(batch_c5s) / len(batch_c5s)
-        metrics["batch_valid_count"] = float(batch_valid)
-        metrics["batch_size"] = float(len(metadata))
+            metrics["erdos/best_c5"] = float(min(batch_c5s))
+            metrics["erdos/mean_c5"] = float(sum(batch_c5s) / len(batch_c5s))
+            metrics["erdos/worst_c5"] = float(max(batch_c5s))
+
+        metrics["erdos/global_best_c5"] = float(self.best_c5) if self.best_c5 < float("inf") else 0.0
+        metrics["erdos/global_valid_total"] = float(self.total_valid)
+
+        # Print summary to driver log
+        max_r = metrics["erdos/max_reward"]
+        avg_r = metrics["erdos/avg_reward"]
+        best = metrics.get("erdos/best_c5", "n/a")
+        print(f"  🎯 Erdős: avg_reward={avg_r:.4f} max_reward={max_r:.4f} "
+              f"valid={batch_valid}/{len(metadata)} "
+              f"best_c5={best}")
 
         return metadata, metrics
