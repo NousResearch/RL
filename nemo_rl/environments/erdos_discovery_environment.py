@@ -487,14 +487,14 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
 
         import time as _time
         _t0 = _time.time()
-        logger.info(f"[{_time.strftime('%H:%M:%S')}] Starting reward computation for {batch_size} rollouts")
+        print(f"[{_time.strftime('%H:%M:%S')}] 🧪 Starting reward computation for {batch_size} rollouts")
 
         for i, message_log in enumerate(message_log_batch):
             if i > 0 and i % 50 == 0:
                 elapsed = _time.time() - _t0
                 rate = i / elapsed if elapsed > 0 else 0
                 eta = (batch_size - i) / rate if rate > 0 else 0
-                logger.info(
+                print(
                     f"[{_time.strftime('%H:%M:%S')}] Reward progress: {i}/{batch_size} "
                     f"({elapsed:.0f}s elapsed, {rate:.1f} it/s, ~{eta:.0f}s remaining)"
                 )
@@ -551,9 +551,11 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
         elapsed = _time.time() - _t0
         valid = sum(1 for r in rewards if r > 0)
         max_r = float(rewards.max()) if len(rewards) > 0 else 0.0
-        logger.info(
-            f"[{_time.strftime('%H:%M:%S')}] Reward computation done: {batch_size} rollouts in {elapsed:.1f}s "
-            f"({valid} valid, max_reward={max_r:.4f})"
+        best_c5 = 1.0 / max_r if max_r > 0 else float("inf")
+        print(
+            f"[{_time.strftime('%H:%M:%S')}] 🎯 Rewards done: {batch_size} rollouts in {elapsed:.1f}s | "
+            f"valid={valid}/{batch_size} ({100*valid/max(1,batch_size):.1f}%) | "
+            f"max_reward={max_r:.4f} | best_C5={best_c5:.6f}"
         )
 
         return EnvironmentReturn(
