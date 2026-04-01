@@ -22,7 +22,7 @@ policy:
   tokenizer:
     name: "/home/shared/models/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16"
     chat_template_kwargs: null
-  max_total_sequence_length: 16384
+  max_total_sequence_length: 4096
   train_global_batch_size: 504
   train_micro_batch_size: 1
   logprob_batch_size: 1
@@ -33,12 +33,12 @@ policy:
       resources:
         num_nodes: 2
         gpus_per_node: 8
-    max_new_tokens: 16384
+    max_new_tokens: 3072
     vllm_cfg:
       async_engine: false
       tensor_parallel_size: 8
       gpu_memory_utilization: 0.85
-      max_model_len: 16384
+      max_model_len: 4096
 
   megatron_cfg:
     tensor_model_parallel_size: 4
@@ -64,7 +64,7 @@ optimizer:
 
 data:
   shuffle: false
-  max_input_seq_length: 16384
+  max_input_seq_length: 4096
 
 env:
   erdos_discovery:
