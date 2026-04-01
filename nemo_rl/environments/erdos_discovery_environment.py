@@ -151,36 +151,71 @@ def _execute_run_function(code: str, timeout: int = 1000, n_cpus: int = 2) -> di
         stdout_capture.append(buf.getvalue())
     namespace["__builtins__"]["print"] = capturing_print
 
-    class _Timeout(Exception):
-        pass
-
-    def _handler(s, f):
-        raise _Timeout(f"Execution timed out after {timeout}s")
-
     try:
-        old_handler = signal.signal(signal.SIGALRM, _handler)
-        signal.alarm(timeout)
-        try:
-            exec(compile(code, "<llm>", "exec"), namespace)
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
+        # Use multiprocessing for timeout (signal.alarm doesn't work in Ray actor threads)
+        import multiprocessing as mp
+        import pickle
 
-        if "run" not in namespace:
+        def _run_in_subprocess(code, ns_pickle, result_queue):
+            """Execute code in a subprocess with proper timeout support."""
+            import signal as _signal
+            namespace = pickle.loads(ns_pickle)
+
+            class _Timeout(Exception):
+                pass
+            def _handler(s, f):
+                raise _Timeout("timeout")
+            _signal.signal(_signal.SIGALRM, _handler)
+            _signal.alarm(timeout)
+            try:
+                exec(compile(code, "<llm>", "exec"), namespace)
+                if "run" not in namespace:
+                    result_queue.put({"error": "No 'run' function defined"})
+                    return
+                out = namespace["run"](seed=42, budget_s=timeout)
+                result_queue.put({"result": out})
+            except _Timeout:
+                result_queue.put({"error": f"Execution timed out after {timeout}s"})
+            except Exception as e:
+                result_queue.put({"error": f"{type(e).__name__}: {str(e)[:300]}"})
+
+        # Try simple exec first with a short thread-based timeout
+        # For most invalid code this returns instantly
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+        def _exec_with_timeout():
+            exec(compile(code, "<llm>", "exec"), namespace)
+            if "run" not in namespace:
+                return {"error": "No 'run' function defined"}
+            result = namespace["run"](seed=42, budget_s=min(timeout, 60))
+            return {"result": result}
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_exec_with_timeout)
+            try:
+                exec_result = future.result(timeout=min(timeout, 120))
+            except FuturesTimeout:
+                # Thread is stuck — it will be abandoned when pool is GC'd
+                return {
+                    "reward": 0.0, "raw_score": None,
+                    "error_msg": f"Execution timed out after {min(timeout, 120)}s",
+                    "stdout": "".join(stdout_capture),
+                }
+            except Exception as e:
+                return {
+                    "reward": 0.0, "raw_score": None,
+                    "error_msg": f"{type(e).__name__}: {str(e)[:300]}",
+                    "stdout": "".join(stdout_capture),
+                }
+
+        if "error" in exec_result:
             return {
                 "reward": 0.0, "raw_score": None,
-                "error_msg": "No 'run' function defined",
+                "error_msg": exec_result["error"],
                 "stdout": "".join(stdout_capture),
             }
 
-        # Call run()
-        signal.signal(signal.SIGALRM, _handler)
-        signal.alarm(timeout)
-        try:
-            result = namespace["run"](seed=42, budget_s=timeout)
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
+        result = exec_result["result"]
 
         if not isinstance(result, tuple) or len(result) != 3:
             return {
