@@ -246,12 +246,6 @@ def _execute_run_function(code: str, timeout: int = 1000, n_cpus: int = 2) -> di
             "stdout": "".join(stdout_capture),
         }
 
-    except _Timeout as e:
-        return {
-            "reward": 0.0, "raw_score": None,
-            "error_msg": str(e),
-            "stdout": "".join(stdout_capture),
-        }
     except Exception as e:
         return {
             "reward": 0.0, "raw_score": None,
