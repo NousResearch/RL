@@ -272,6 +272,13 @@ def main():
     import os
     from omegaconf import OmegaConf
     from nemo_rl.utils.config import load_config
+
+    # Register custom resolvers needed by the base config
+    if not OmegaConf.has_resolver("mul"):
+        OmegaConf.register_new_resolver("mul", lambda a, b: a * b)
+    if not OmegaConf.has_resolver("div"):
+        OmegaConf.register_new_resolver("div", lambda a, b: a // b)
+
     try:
         from nemo_rl.utils.config import register_omegaconf_resolvers
         register_omegaconf_resolvers()

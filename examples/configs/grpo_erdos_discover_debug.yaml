@@ -37,6 +37,9 @@ policy:
     alpha: 1.0
     dropout: 0.0
 
+  dynamic_batching:
+    enabled: false
+
   generation:
     backend: "vllm"
     max_new_tokens: 2048
