@@ -1,18 +1,16 @@
 # TTT-Discover Erdős — Nemotron-3-Super-120B-A12B
-# Based on Dakota's working grpo_superv3.yaml adapted for Erdős TTT-Discover.
-# 8 nodes: 2 inference (vLLM TP=8) + 6 training (Megatron TP=4 EP=8)
-defaults: "grpo_math_1B.yaml"
+# Inherits from grpo_superv3.yaml (the working Nemotron Super config)
+defaults: "grpo_superv3.yaml"
 
 grpo:
-  num_prompts_per_step: 8        # 8 PUCT-selected states per step
-  num_generations_per_prompt: 64  # 64 rollouts per state (paper default)
-  max_num_epochs: 1
-  max_num_steps: 50              # 50 training steps (paper default)
-  max_rollout_turns: 1           # Single-turn code generation
+  num_prompts_per_step: 8
+  num_generations_per_prompt: 64
+  max_num_steps: 50
+  max_rollout_turns: 1
   remove_constant_reward_groups: true
   adv_estimator:
     name: entropic_adaptive_beta
-    gamma: 0.6931471805599453    # ln(2)
+    gamma: 0.6931471805599453
 
 loss_fn:
   kl_penalty_coef: 0.1
@@ -25,17 +23,27 @@ policy:
     name: "/home/shared/models/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16"
     chat_template_kwargs: null
   max_total_sequence_length: 16384
-  train_global_batch_size: 512    # 8 groups × 64 rollouts
+  train_global_batch_size: 512
   train_micro_batch_size: 1
   logprob_batch_size: 1
 
-  # Megatron backend for 120B MoE
+  generation:
+    colocated:
+      enabled: false
+      resources:
+        num_nodes: 2
+        gpus_per_node: 8
+    max_new_tokens: 16384
+    vllm_cfg:
+      tensor_parallel_size: 8
+      gpu_memory_utilization: 0.85
+      max_model_len: 16384
+
   megatron_cfg:
-    enabled: true
     tensor_model_parallel_size: 4
     pipeline_model_parallel_size: 1
     context_parallel_size: 1
-    expert_model_parallel_size: 8   # 128 experts / 8 EP = 16 experts per rank
+    expert_model_parallel_size: 8
     sequence_parallel: true
     activation_checkpointing: true
     empty_unused_memory_level: 2
@@ -44,47 +52,18 @@ policy:
       optimizer_cpu_offload: true
       optimizer_offload_fraction: 1.0
 
-  dtensor_cfg:
-    enabled: false
-
-  lora_cfg:
-    enabled: false   # No LoRA for now (Megatron backend)
-
-  generation:
-    backend: "vllm"
-    colocated:
-      enabled: false
-      resources:
-        num_nodes: 2            # 2 nodes for vLLM inference
-        gpus_per_node: 8
-    max_new_tokens: 16384
-    temperature: 1.0
-    top_p: 1.0
-    stop_token_ids: null
-    stop_strings: null
-    vllm_cfg:
-      async_engine: false
-      tensor_parallel_size: 8   # Full node TP for inference
-      pipeline_parallel_size: 1
-      expert_parallel_size: 1
-      gpu_memory_utilization: 0.85
-      max_model_len: 16384
-
   dynamic_batching:
     enabled: false
 
+  lora_cfg:
+    enabled: false
+
 optimizer:
-  name: adamw
-  lr: 4.0e-5                   # Paper default
-  betas: [0.9, 0.999]
-  weight_decay: 0.01
-  scheduler:
-    name: cosine
-    warmup_steps: 2
-    min_lr_ratio: 0.1
+  lr: 4.0e-5
 
 data:
   shuffle: false
+  max_input_seq_length: 16384
 
 env:
   erdos_discovery:
