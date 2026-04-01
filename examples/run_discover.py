@@ -1,28 +1,18 @@
 """Run script for TTT-Discover GRPO training on the Erdős Minimum Overlap Problem.
 
-This follows the sliding_puzzle pattern: custom IterableDataset that generates
-prompts dynamically from a PUCT buffer, wired into the standard GRPO loop.
+Matches the reference implementation at:
+  https://github.com/test-time-training/discover/blob/main/examples/erdos_min_overlap/env.py
 
-Usage:
-    # Start the Gym resource server first (separate process/node):
-    cd ~/Gym && ng_run "+config_paths=[resources_servers/erdos_discovery/configs/erdos_discovery.yaml]"
-
-    # Then run training:
-    cd ~/RL && uv run python examples/run_discover.py [--config examples/configs/grpo_erdos_discover.yaml]
-
-Reference: "Learning to Discover at Test Time" (arXiv:2601.16175)
+Usage (inside NeMo RL container):
+  python examples/run_discover.py --config examples/configs/grpo_erdos_discover.yaml
 """
 
-import itertools
-import argparse
 import itertools
 import logging
 import os
 import sys
 from typing import Optional
 
-import aiohttp
-import asyncio
 import numpy as np
 import ray
 import torch
@@ -34,43 +24,12 @@ from nemo_rl.data.interfaces import DatumSpec, LLMMessageLogType
 from nemo_rl.distributed.virtual_cluster import init_ray
 from nemo_rl.environments.erdos_discovery_environment import (
     ErdosDiscoveryEnvironment,
+    build_erdos_question,
+    create_initial_state,
 )
 from nemo_rl.models.generation import configure_generation_config
-from nemo_rl.utils.config import load_config
 
 logger = logging.getLogger(__name__)
-
-# ═══════════════════════════════════════════════════════════════════
-# Problem description (same as in the Gym resource server)
-# ═══════════════════════════════════════════════════════════════════
-
-PROBLEM_DESCRIPTION = """\
-Erdos Minimum Overlap Problem
-==============================
-
-Goal: Find a step function f (Python list or NumPy array) giving the
-tightest possible upper bound on the Erdos minimum overlap constant c.
-
-Background:
-  For integer n, partition {1,...,2n} into equal sets A, B.
-  M_k = #{(a,b) : a in A, b in B, a-b=k}.
-  c = lim_{n->inf} min_{A,B} max_k M_k / n.
-
-Known bounds: 0.379005 < c < 0.380927 (Haugland 2016)
-Current best upper bound: 0.380876 (2026)
-
-Upper Bound via Step Functions:
-  f : [0,1] -> [0,1] with mean(f) = 0.5 gives:
-    bound = 2*n*max(autocorr(f)) / sum(f)^2
-  where autocorr is computed via FFT.
-  Smaller bound -> higher reward (reward = 1/bound).
-
-Constraints: 1 <= len(f) <= 1000, 0 <= f[i] <= 1, mean(f) ~ 0.5 (tol 1e-3).
-
-Output: Python code defining variable `f` in a ```python block.
-Allowed: numpy, math, random, itertools, functools, collections.
-Execution limit: 600 seconds. Target: bound < 0.380876.\
-"""
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -80,38 +39,25 @@ Execution limit: 600 seconds. Target: bound < 0.380876.\
 
 def generate_discover_datum(
     tokenizer,
-    state_info: dict,
+    state: dict,
     idx: int,
     task_name: str = "erdos_discovery",
 ) -> DatumSpec:
-    """Create a DatumSpec from a PUCT-selected state.
+    """Create a DatumSpec from a state dict.
 
-    Args:
-        tokenizer: HuggingFace tokenizer.
-        state_info: Dict from /select_state with keys:
-            state, context, reward, system_prompt, user_prompt.
-        idx: Datum index.
-        task_name: Task name for env routing.
-
-    Returns:
-        DatumSpec ready for the GRPO training loop.
+    The prompt is built using the reference TTT-Discover get_question() format.
     """
-    system_prompt = state_info.get("system_prompt", PROBLEM_DESCRIPTION)
-    user_prompt = state_info["user_prompt"]
+    user_prompt = build_erdos_question(state)
 
     messages: LLMMessageLogType = [
-        {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
 
-    # Tokenize the prompt
     prompt_text = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
     prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
-    prompt_tensor = torch.tensor(prompt_ids, dtype=torch.long)
 
-    # Attach token_ids to messages for NeMo RL's message_log format
     for msg in messages:
         msg_text = tokenizer.apply_chat_template(
             [msg], tokenize=False, add_generation_prompt=False
@@ -123,9 +69,12 @@ def generate_discover_datum(
         message_log=messages,
         length=len(prompt_ids),
         extra_env_info={
-            "parent_state": state_info.get("state"),
-            "context": state_info.get("context"),
-            "reward": state_info.get("reward", 0.0),
+            "construction": state.get("construction"),
+            "c5_bound": state.get("c5_bound"),
+            "n_points": state.get("n_points"),
+            "code": state.get("code", ""),
+            "parent_c5": state.get("parent_c5"),
+            "observation": state.get("observation", ""),
         },
         loss_multiplier=1.0,
         idx=idx,
@@ -134,77 +83,45 @@ def generate_discover_datum(
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Dynamic dataset backed by PUCT buffer
+# Dataset backed by initial states (PUCT selection comes later)
 # ═══════════════════════════════════════════════════════════════════
 
 
 class DiscoverDataset(IterableDataset):
-    """Iterable dataset that fetches prompts from the PUCT buffer each step.
+    """Dataset that generates prompts from Erdős initial states.
 
-    Each iteration fetches `num_groups_per_step` states from the Gym resource
-    server's /select_state endpoint and yields them as DatumSpecs.
+    Each iteration generates diverse initial states and yields them as
+    DatumSpecs with the reference TTT-Discover prompt format.
 
-    The dataset loops indefinitely — the training loop controls termination
-    via max_num_steps in the GRPO config.
+    For now, initial states are random perturbations of h=0.5 (matching
+    the reference). Future: PUCT buffer selects states based on prior
+    discoveries.
     """
 
     def __init__(
         self,
         tokenizer,
-        resource_server_url: str,
-        num_groups_per_step: int = 8,
+        num_states_per_step: int = 8,
         task_name: str = "erdos_discovery",
-        length: int = 1000,  # Nominal length for dataloader
+        length: int = 1000,
+        seed: int = 42,
     ):
         self.tokenizer = tokenizer
-        self.resource_server_url = resource_server_url
-        self.num_groups_per_step = num_groups_per_step
+        self.num_states_per_step = num_states_per_step
         self.task_name = task_name
         self.length = length
         self._idx_counter = itertools.count()
-
-    def _fetch_states_sync(self) -> list[dict]:
-        """Synchronously fetch states from the PUCT buffer."""
-        import requests
-
-        try:
-            resp = requests.post(
-                f"{self.resource_server_url}/select_state",
-                json={
-                    "batch_size": self.num_groups_per_step,
-                    "num_groups": self.num_groups_per_step,
-                },
-                timeout=30,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("states", [])
-        except Exception as e:
-            logger.error("Failed to fetch states from PUCT buffer: %s", e)
-            # Return fallback: single default prompt
-            return [
-                {
-                    "state": [0.5] * 50,
-                    "context": [],
-                    "reward": 0.5,
-                    "system_prompt": PROBLEM_DESCRIPTION,
-                    "user_prompt": (
-                        "Starting construction (bound=2.000000, 50 pieces):\n"
-                        "[0.5000, 0.5000, ..., 0.5000]\n\n"
-                        "Improve on this construction. Write Python code that "
-                        "defines a better step function `f`. Think carefully."
-                    ),
-                }
-            ]
+        self._rng = np.random.default_rng(seed)
 
     def __iter__(self):
         for _ in itertools.count():
-            states = self._fetch_states_sync()
-            for state_info in states:
+            # Generate fresh initial states each step
+            for _ in range(self.num_states_per_step):
+                state = create_initial_state(self._rng)
                 idx = next(self._idx_counter)
                 yield generate_discover_datum(
                     self.tokenizer,
-                    state_info,
+                    state,
                     idx=idx,
                     task_name=self.task_name,
                 )
@@ -219,38 +136,27 @@ class DiscoverDataset(IterableDataset):
 
 
 def setup_discover_data(config: MasterConfig, tokenizer):
-    """Create dataset, environment, and wire them together.
-
-    Returns:
-        (train_dataset, val_dataset, task_to_env, val_task_to_env)
-    """
+    """Create dataset, environment, and wire them together."""
     env_config = config.get("env", {}).get("erdos_discovery", {})
-    resource_server_url = env_config.get(
-        "resource_server_url", "http://localhost:8080"
-    )
-    num_groups_per_step = env_config.get("num_groups_per_step", 8)
+    num_states = config.get("grpo", {}).get("num_prompts_per_step", 8)
     task_name = "erdos_discovery"
 
-    # Create the dynamic dataset
     train_dataset = DiscoverDataset(
         tokenizer=tokenizer,
-        resource_server_url=resource_server_url,
-        num_groups_per_step=num_groups_per_step,
+        num_states_per_step=num_states,
         task_name=task_name,
-        length=config["grpo"]["max_num_steps"] * num_groups_per_step,
+        length=config.get("grpo", {}).get("max_num_steps", 50) * num_states,
+        seed=config.get("seed", 42),
     )
 
-    # Validation dataset: same thing (could be a fixed set, but for discovery
-    # we just re-sample from the buffer)
     val_dataset = DiscoverDataset(
         tokenizer=tokenizer,
-        resource_server_url=resource_server_url,
-        num_groups_per_step=num_groups_per_step,
+        num_states_per_step=num_states,
         task_name=task_name,
-        length=num_groups_per_step,
+        length=num_states,
+        seed=config.get("seed", 42) + 1,
     )
 
-    # Create the environment as a Ray actor
     env = ErdosDiscoveryEnvironment.options(
         num_gpus=0,
         max_restarts=-1,
@@ -269,11 +175,10 @@ def setup_discover_data(config: MasterConfig, tokenizer):
 
 
 def main():
-    import os
     from omegaconf import OmegaConf
     from nemo_rl.utils.config import load_config
 
-    # Register custom resolvers needed by the base config
+    # Register custom resolvers
     if not OmegaConf.has_resolver("mul"):
         OmegaConf.register_new_resolver("mul", lambda a, b: a * b)
     if not OmegaConf.has_resolver("div"):
@@ -283,7 +188,7 @@ def main():
         from nemo_rl.utils.config import register_omegaconf_resolvers
         register_omegaconf_resolvers()
     except ImportError:
-        pass  # v0.5.0 container doesn't have this
+        pass
 
     # Parse --config argument
     config_path = None
@@ -297,13 +202,13 @@ def main():
 
     if config_path is None:
         config_path = os.path.join(
-            os.path.dirname(__file__), "configs", "grpo_erdos_discover_debug.yaml"
+            os.path.dirname(__file__), "configs", "grpo_erdos_discover.yaml"
         )
 
     print(f"Loading config from: {config_path}")
     config = load_config(config_path)
 
-    # Resolve OmegaConf interpolations (e.g. ${policy.model_name})
+    # Resolve OmegaConf interpolations
     oc = OmegaConf.create(config)
     config = OmegaConf.to_container(oc, resolve=True)
 
@@ -324,14 +229,7 @@ def main():
         setup_discover_data(config, tokenizer)
     )
 
-    # Setup and grpo_train have different signatures across container versions.
-    # super-v3 setup() returns 11 values:
-    #   policy, policy_gen, nemo_gym, clusters, dataloader, val_dataloader,
-    #   loss_fn, logger, checkpointer, grpo_state, master_config
-    # grpo_train() expects 12 params:
-    #   policy, policy_gen, dataloader, val_dataloader, tokenizer,
-    #   loss_fn, task_to_env, val_task_to_env, logger, checkpointer,
-    #   grpo_state, master_config
+    # Setup returns vary across container versions
     setup_result = setup(config, tokenizer, train_dataset, val_dataset)
     setup_list = list(setup_result)
     n = len(setup_list)
@@ -351,7 +249,7 @@ def main():
             grpo_state, master_config,
         )
     elif n == 10:
-        # v0.5.0 container (no nemo_gym)
+        # v0.5.0 container
         (policy, policy_generation, dataloader, val_dataloader,
          loss_fn, nemo_logger, checkpointer, grpo_state,
          master_config, _extra) = setup_list
@@ -364,7 +262,7 @@ def main():
             grpo_state, master_config,
         )
     else:
-        raise RuntimeError(f"Unexpected setup() return count: {n}. Check container version.")
+        raise RuntimeError(f"Unexpected setup() return count: {n}")
 
 
 if __name__ == "__main__":

@@ -68,11 +68,10 @@ data:
 
 env:
   erdos_discovery:
-    resource_server_url: "inline"
     num_initial_states: 16
     num_groups_per_step: 8
-    sandbox_timeout: 600
-    request_timeout: 660
+    sandbox_timeout: 1000
+
   should_use_nemo_gym: false
 
 cluster:

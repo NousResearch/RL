@@ -64,11 +64,9 @@ data:
 
 env:
   erdos_discovery:
-    resource_server_url: "inline"
     num_initial_states: 8
     num_groups_per_step: 4
-    sandbox_timeout: 60
-    request_timeout: 120
+    sandbox_timeout: 120
 
 checkpointing:
   enabled: false
