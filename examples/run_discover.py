@@ -324,56 +324,47 @@ def main():
         setup_discover_data(config, tokenizer)
     )
 
-    # Setup returns vary across container versions — unpack dynamically
+    # Setup and grpo_train have different signatures across container versions.
+    # super-v3 setup() returns 11 values:
+    #   policy, policy_gen, nemo_gym, clusters, dataloader, val_dataloader,
+    #   loss_fn, logger, checkpointer, grpo_state, master_config
+    # grpo_train() expects 12 params:
+    #   policy, policy_gen, dataloader, val_dataloader, tokenizer,
+    #   loss_fn, task_to_env, val_task_to_env, logger, checkpointer,
+    #   grpo_state, master_config
     setup_result = setup(config, tokenizer, train_dataset, val_dataset)
-
-    # Inspect the grpo_train signature to know what to pass
-    import inspect
-    train_sig = inspect.signature(grpo_train)
-    train_params = list(train_sig.parameters.keys())
-    print(f"  setup() returned {len(setup_result)} values")
-    print(f"  grpo_train() expects {len(train_params)} params: {train_params[:5]}...")
-
-    # The standard pattern: setup returns everything grpo_train needs,
-    # except task_to_env and val_task_to_env which we provide.
-    # Detect where to inject them based on parameter names.
     setup_list = list(setup_result)
+    n = len(setup_list)
+    print(f"  setup() returned {n} values")
 
-    # Build kwargs for grpo_train by matching setup outputs + our envs
-    # Common signatures:
-    # v0.5.0: setup returns (policy, gen, dl, val_dl, tokenizer, loss, env, val_env, logger, ckpt, state, config)
-    # super-v3: may return more
-    # Strategy: pass setup outputs positionally, but swap in our envs
-    if len(setup_list) == 12:
-        # v0.5.0 style: already includes env placeholders at positions 6,7
-        setup_list[6] = task_to_env
-        setup_list[7] = val_task_to_env
-        grpo_train(*setup_list)
-    elif len(setup_list) == 10:
-        # Older style without envs
-        policy, policy_generation, dataloader, val_dataloader, tokenizer_out, loss_fn, nemo_logger, checkpointer, grpo_state, master_config = setup_list
+    if n == 11:
+        # super-v3 container
+        (policy, policy_generation, _nemo_gym, _clusters,
+         dataloader, val_dataloader, loss_fn,
+         nemo_logger, checkpointer, grpo_state, master_config) = setup_list
         grpo_train(
-            policy, policy_generation, dataloader, val_dataloader,
-            tokenizer_out, loss_fn, task_to_env, val_task_to_env,
-            nemo_logger, checkpointer, grpo_state, master_config,
+            policy, policy_generation,
+            dataloader, val_dataloader,
+            tokenizer, loss_fn,
+            task_to_env, val_task_to_env,
+            nemo_logger, checkpointer,
+            grpo_state, master_config,
+        )
+    elif n == 10:
+        # v0.5.0 container (no nemo_gym)
+        (policy, policy_generation, dataloader, val_dataloader,
+         loss_fn, nemo_logger, checkpointer, grpo_state,
+         master_config, _extra) = setup_list
+        grpo_train(
+            policy, policy_generation,
+            dataloader, val_dataloader,
+            tokenizer, loss_fn,
+            task_to_env, val_task_to_env,
+            nemo_logger, checkpointer,
+            grpo_state, master_config,
         )
     else:
-        # Unknown format — try passing everything with envs injected
-        # Find the positions of env-like params in grpo_train signature
-        env_idx = None
-        for i, p in enumerate(train_params):
-            if 'task_to_env' in p and 'val' not in p:
-                env_idx = i
-                break
-        if env_idx is not None:
-            # Insert our envs at the right position
-            args = list(setup_list)
-            args.insert(env_idx, task_to_env)
-            args.insert(env_idx + 1, val_task_to_env)
-            grpo_train(*args[:len(train_params)])
-        else:
-            print(f"WARNING: Could not determine grpo_train signature, trying positional")
-            grpo_train(*setup_list)
+        raise RuntimeError(f"Unexpected setup() return count: {n}. Check container version.")
 
 
 if __name__ == "__main__":
