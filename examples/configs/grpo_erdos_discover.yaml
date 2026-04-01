@@ -35,6 +35,7 @@ policy:
         gpus_per_node: 8
     max_new_tokens: 16384
     vllm_cfg:
+      async_engine: false
       tensor_parallel_size: 8
       gpu_memory_utilization: 0.85
       max_model_len: 16384
