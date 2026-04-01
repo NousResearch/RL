@@ -244,8 +244,73 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface[ErdosMetadata]):
         """
         import asyncio
 
-        return asyncio.get_event_loop().run_until_complete(
-            self._async_step(message_log_batch, metadata)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            # Ray actors run inside an event loop — use nest_asyncio or run sync
+            return self._sync_step(message_log_batch, metadata)
+        else:
+            return asyncio.run(
+                self._async_step(message_log_batch, metadata)
+            )
+
+    def _sync_step(
+        self,
+        message_log_batch: list[LLMMessageLogType],
+        metadata: list[ErdosMetadata],
+    ) -> EnvironmentReturn[ErdosMetadata]:
+        """Synchronous step for use inside running event loops (Ray actors)."""
+        batch_size = len(message_log_batch)
+        rewards = torch.zeros(batch_size)
+        terminateds = torch.ones(batch_size)
+        observations = [{}] * batch_size
+        answers = [None] * batch_size
+        updated_metadata = list(metadata)
+
+        for i, message_log in enumerate(message_log_batch):
+            response_text = ""
+            for msg in reversed(message_log):
+                if msg.get("role") == "assistant":
+                    response_text = msg.get("content", "")
+                    break
+
+            if self._inline_mode:
+                result = _inline_compute_reward(
+                    response_text, timeout=self.sandbox_timeout
+                )
+            else:
+                result = {"reward": 0.0, "bound": None, "error_msg": "sync mode requires inline"}
+
+            reward = result.get("reward", 0.0)
+            rewards[i] = reward
+            self.total_verified += 1
+
+            if reward > 0:
+                self.total_valid += 1
+                bound = result.get("bound")
+                if reward > self.best_reward:
+                    self.best_reward = reward
+                    self.best_bound = bound or (1.0 / reward if reward > 0 else float("inf"))
+                answers[i] = f"bound={bound:.6f}" if bound else f"reward={reward:.4f}"
+
+            if i < len(updated_metadata):
+                updated_metadata[i] = {
+                    **updated_metadata[i],
+                    "reward": reward,
+                    "bound": result.get("bound"),
+                    "error_msg": result.get("error_msg", ""),
+                }
+
+        return EnvironmentReturn(
+            observations=observations,
+            metadata=updated_metadata,
+            next_stop_strings=[None] * batch_size,
+            rewards=rewards,
+            terminateds=terminateds,
+            answers=answers,
         )
 
     async def _async_step(
