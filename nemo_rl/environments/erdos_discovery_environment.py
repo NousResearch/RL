@@ -532,7 +532,7 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
                 if c5 is not None and c5 < self.best_c5:
                     self.best_c5 = c5
                     self.best_reward = reward
-                    logger.info(f"New best C5: {c5:.6f} (reward={reward:.4f})")
+                    print(f"🏆 NEW BEST C5: {c5:.6f} (reward={reward:.4f})")
 
                 answers[i] = f"C5={c5:.6f}" if c5 else f"reward={reward:.4f}"
 
@@ -551,11 +551,17 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
         elapsed = _time.time() - _t0
         valid = sum(1 for r in rewards if r > 0)
         max_r = float(rewards.max()) if len(rewards) > 0 else 0.0
-        best_c5 = 1.0 / max_r if max_r > 0 else float("inf")
+        batch_best_c5 = 1.0 / max_r if max_r > 0 else float("inf")
+        global_best = self.best_c5 if self.best_c5 < float("inf") else float("inf")
         print(
-            f"[{_time.strftime('%H:%M:%S')}] 🎯 Rewards done: {batch_size} rollouts in {elapsed:.1f}s | "
-            f"valid={valid}/{batch_size} ({100*valid/max(1,batch_size):.1f}%) | "
-            f"max_reward={max_r:.4f} | best_C5={best_c5:.6f}"
+            f"\n{'='*60}\n"
+            f"🎯 STEP REWARDS: {batch_size} rollouts in {elapsed:.1f}s\n"
+            f"   valid:        {valid}/{batch_size} ({100*valid/max(1,batch_size):.1f}%)\n"
+            f"   avg_reward:   {sum(float(r) for r in rewards)/max(1,batch_size):.6f}\n"
+            f"   max_reward:   {max_r:.6f}\n"
+            f"   batch_best_C5: {batch_best_c5:.6f}\n"
+            f"   GLOBAL_BEST_C5: {global_best:.6f}\n"
+            f"{'='*60}"
         )
 
         return EnvironmentReturn(
