@@ -1,52 +1,81 @@
-# TTT-Discover GRPO config for Erdős Minimum Overlap Problem.
-# Reference: arXiv:2601.16175
-#
-# Usage:
-#   uv run python examples/run_discover.py --config examples/configs/grpo_erdos_discover.yaml
-#
-# Requires the Gym Erdős resource server running separately:
-#   cd ~/Gym && ng_run "+config_paths=[resources_servers/erdos_discovery/configs/erdos_discovery.yaml]"
-
-seed: 42
+# TTT-Discover Erdős — Nemotron-3-Super-120B-A12B
+# Based on Dakota's working grpo_superv3.yaml adapted for Erdős TTT-Discover.
+# 8 nodes: 2 inference (vLLM TP=8) + 6 training (Megatron TP=4 EP=8)
+defaults: "grpo_math_1B.yaml"
 
 grpo:
-  num_prompts_per_step: 8        # PUCT selects 8 states per step
-  num_generations_per_prompt: 64  # 64 rollouts per state = 512 total
+  num_prompts_per_step: 8        # 8 PUCT-selected states per step
+  num_generations_per_prompt: 64  # 64 rollouts per state (paper default)
   max_num_epochs: 1
   max_num_steps: 50              # 50 training steps (paper default)
-  max_rollout_turns: 1           # Single-turn: generate code, get reward
+  max_rollout_turns: 1           # Single-turn code generation
   remove_constant_reward_groups: true
   adv_estimator:
     name: entropic_adaptive_beta
     gamma: 0.6931471805599453    # ln(2)
 
 loss_fn:
-  kl_penalty_coef: 0.1           # KL penalty (paper uses 0.1)
+  kl_penalty_coef: 0.1
   ratio_clip: 0.2
-  token_level_loss: false         # Sequence-level policy ratio
-  importance_sampling: true
+  token_level_loss: false
 
 policy:
-  model_name: "gpt-oss-120b-bf16"
-  tokenizer: "gpt-oss-120b-bf16"
-  max_total_sequence_length: 32768
-  train_global_batch_size: 512   # 8 groups × 64 rollouts
-  train_micro_batch_size: 4
+  model_name: "/home/shared/models/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16"
+  tokenizer:
+    name: "/home/shared/models/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16"
+    chat_template_kwargs: null
+  max_total_sequence_length: 16384
+  train_global_batch_size: 512    # 8 groups × 64 rollouts
+  train_micro_batch_size: 1
+  logprob_batch_size: 1
+
+  # Megatron backend for 120B MoE
+  megatron_cfg:
+    enabled: true
+    tensor_model_parallel_size: 4
+    pipeline_model_parallel_size: 1
+    context_parallel_size: 1
+    expert_model_parallel_size: 8   # 128 experts / 8 EP = 16 experts per rank
+    sequence_parallel: true
+    activation_checkpointing: true
+    empty_unused_memory_level: 2
+    optimizer_cpu_offload: true
+    optimizer:
+      optimizer_cpu_offload: true
+      optimizer_offload_fraction: 1.0
 
   dtensor_cfg:
-    enabled: true
-    tensor_parallel_size: 1
-    sequence_parallel: false
+    enabled: false
 
   lora_cfg:
-    enabled: true
-    rank: 32
-    alpha: 1.0
-    dropout: 0.0
+    enabled: false   # No LoRA for now (Megatron backend)
+
+  generation:
+    backend: "vllm"
+    colocated:
+      enabled: false
+      resources:
+        num_nodes: 2            # 2 nodes for vLLM inference
+        gpus_per_node: 8
+    max_new_tokens: 16384
+    temperature: 1.0
+    top_p: 1.0
+    stop_token_ids: null
+    stop_strings: null
+    vllm_cfg:
+      async_engine: false
+      tensor_parallel_size: 8   # Full node TP for inference
+      pipeline_parallel_size: 1
+      expert_parallel_size: 1
+      gpu_memory_utilization: 0.85
+      max_model_len: 16384
+
+  dynamic_batching:
+    enabled: false
 
 optimizer:
   name: adamw
-  lr: 4.0e-5
+  lr: 4.0e-5                   # Paper default
   betas: [0.9, 0.999]
   weight_decay: 0.01
   scheduler:
@@ -55,33 +84,29 @@ optimizer:
     min_lr_ratio: 0.1
 
 data:
-  shuffle: false                  # PUCT handles selection order
-  # No static dataset — DiscoverDataset generates prompts dynamically
+  shuffle: false
 
 env:
   erdos_discovery:
-    resource_server_url: "http://localhost:8080"
+    resource_server_url: "inline"
     num_initial_states: 16
     num_groups_per_step: 8
     sandbox_timeout: 600
     request_timeout: 660
+  should_use_nemo_gym: false
 
 cluster:
   gpus_per_node: 8
-  num_nodes: 2                   # 2 training nodes
+  num_nodes: 8
 
-generation:
-  backend: vllm
-  colocated: false               # Inference on separate nodes
-  temperature: 1.0
-  top_p: 1.0
-  max_new_tokens: 16384          # Long context for code generation
+logger:
+  log_dir: "results/erdos-120b"
+  wandb_enabled: false
+  tensorboard_enabled: false
+  mlflow_enabled: false
+  swanlab_enabled: false
 
 checkpointing:
   enabled: true
-  checkpoint_dir: "results/ttt-discover-erdos"
-  save_frequency: 5              # Every 5 steps
-
-wandb:
-  enabled: true
-  project: "ttt-discover-erdos"
+  checkpoint_dir: "results/erdos-120b"
+  save_period: 5
