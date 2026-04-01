@@ -36,7 +36,7 @@ from nemo_rl.environments.erdos_discovery_environment import (
     ErdosDiscoveryEnvironment,
 )
 from nemo_rl.models.generation import configure_generation_config
-from nemo_rl.utils.config import load_config
+from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
 
 logger = logging.getLogger(__name__)
 
@@ -271,12 +271,9 @@ def setup_discover_data(config: MasterConfig, tokenizer):
 def main():
     import os
     from omegaconf import OmegaConf
-    from nemo_rl.utils.config import load_config
-    try:
-        from nemo_rl.utils.config import register_omegaconf_resolvers
-        register_omegaconf_resolvers()
-    except ImportError:
-        pass  # v0.5.0 container doesn't have this
+    from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
+
+    register_omegaconf_resolvers()
 
     # Parse --config argument
     config_path = None
