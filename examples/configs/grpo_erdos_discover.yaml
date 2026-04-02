@@ -93,4 +93,7 @@ logger:
 checkpointing:
   enabled: false
   checkpoint_dir: "results/erdos-120b"
-  save_period: 10
+  save_period: 999999
+  checkpoint_must_save_by: null
+  model_save_format: "safetensors"
+  save_consolidated: false
