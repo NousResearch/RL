@@ -179,57 +179,84 @@ def _execute_run_function(code: str, timeout: int = 1000, n_cpus: int = 2) -> di
             except Exception as e:
                 result_queue.put({"error": f"{type(e).__name__}: {str(e)[:300]}"})
 
-        # Use multiprocessing with kill() for hard timeout
+        # Run in subprocess with signal.alarm for clean timeout.
+        # The subprocess handles its own timeout and exits cleanly.
+        # We only use p.terminate() (SIGTERM, not SIGKILL) as a last resort.
         import multiprocessing as _mp
-        import pickle as _pickle
 
         _EXEC_TIMEOUT = min(timeout, 1000)
 
-        def _worker_fn(code_str, q):
-            import signal
-            signal.signal(signal.SIGALRM, lambda s, f: (_ for _ in ()).throw(Exception("timeout")))
-            signal.alarm(_EXEC_TIMEOUT - 5)  # 5s grace before hard kill
+        def _worker_fn(code_str, result_queue, exec_timeout):
+            """Run code in a subprocess. signal.alarm works here (main thread)."""
+            import signal as _sig
+            import sys as _sys
+            import os as _os
+
+            class _AlarmTimeout(BaseException):
+                pass
+
+            def _alarm_handler(signum, frame):
+                raise _AlarmTimeout()
+
+            _sig.signal(_sig.SIGALRM, _alarm_handler)
+            _sig.alarm(exec_timeout)
+
             try:
-                ns = {}
-                ns["__builtins__"] = __builtins__ if isinstance(__builtins__, dict) else __builtins__.__dict__.copy()
                 import numpy, math, random
-                ns.update({"np": numpy, "numpy": numpy, "math": math, "random": random})
-                def _eval(h, c, n):
-                    from erdos_verify import verify_c5_solution as _v
-                    _v(h, c, n)
-                    return float(c)
-                ns["evaluate_erdos_solution"] = lambda h, c, n: float(c)
+                ns = {
+                    "__builtins__": __builtins__ if isinstance(__builtins__, dict) else vars(__builtins__).copy(),
+                    "np": numpy, "numpy": numpy, "math": math, "random": random,
+                    "evaluate_erdos_solution": lambda h, c, n: float(c),
+                }
                 exec(compile(code_str, "<llm>", "exec"), ns)
                 if "run" not in ns:
-                    q.put({"error": "No 'run' function defined"})
+                    result_queue.put({"error": "No 'run' function defined"})
                     return
-                out = ns["run"](seed=42, budget_s=_EXEC_TIMEOUT - 10)
-                q.put({"result": (out[0].tolist() if hasattr(out[0], 'tolist') else list(out[0]), float(out[1]), int(out[2]))})
+                out = ns["run"](seed=42, budget_s=exec_timeout - 10)
+                # Serialize result (numpy arrays can't cross process boundary directly)
+                h = out[0].tolist() if hasattr(out[0], "tolist") else list(out[0])
+                result_queue.put({"result": (h, float(out[1]), int(out[2]))})
+            except _AlarmTimeout:
+                result_queue.put({"error": f"Execution timed out after {exec_timeout}s"})
             except Exception as e:
-                q.put({"error": f"{type(e).__name__}: {str(e)[:300]}"})
+                result_queue.put({"error": f"{type(e).__name__}: {str(e)[:300]}"})
+            finally:
+                _sig.alarm(0)  # Cancel any pending alarm
 
         q = _mp.Queue()
-        p = _mp.Process(target=_worker_fn, args=(code, q))
+        p = _mp.Process(target=_worker_fn, args=(code, q, _EXEC_TIMEOUT))
         p.start()
-        p.join(timeout=_EXEC_TIMEOUT + 10)
+        # Wait for subprocess: alarm should fire inside it, so give extra grace
+        p.join(timeout=_EXEC_TIMEOUT + 30)
 
         if p.is_alive():
-            p.kill()
-            p.join(timeout=5)
+            # Subprocess didn't exit cleanly — send SIGTERM first (graceful)
+            p.terminate()
+            p.join(timeout=10)
+            if p.is_alive():
+                p.kill()  # Last resort
+                p.join(timeout=5)
             return {
                 "reward": 0.0, "raw_score": None,
-                "error_msg": f"Execution killed after {_EXEC_TIMEOUT}s timeout",
+                "error_msg": f"Subprocess terminated after {_EXEC_TIMEOUT}s",
                 "stdout": "".join(stdout_capture),
             }
 
         if q.empty():
             return {
                 "reward": 0.0, "raw_score": None,
-                "error_msg": "Worker process died without result",
+                "error_msg": "Subprocess exited without result",
                 "stdout": "".join(stdout_capture),
             }
 
-        exec_result = q.get_nowait()
+        try:
+            exec_result = q.get_nowait()
+        except Exception:
+            return {
+                "reward": 0.0, "raw_score": None,
+                "error_msg": "Failed to read subprocess result",
+                "stdout": "".join(stdout_capture),
+            }
 
         if "error" in exec_result:
             return {
