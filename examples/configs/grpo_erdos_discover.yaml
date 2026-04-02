@@ -1,5 +1,4 @@
-# TTT-Discover Erdős — Nemotron-3-Super-120B-A12B
-# 10 nodes: 2 inference + 8 training, CP=2 for 16k seq len
+# TTT-Discover Erdős — Nemotron-3-Super-120B-A12B, 4k seq, 8 nodes
 defaults: "grpo_superv3.yaml"
 
 grpo:
@@ -25,7 +24,7 @@ policy:
   tokenizer:
     name: "/home/shared/models/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16"
     chat_template_kwargs: null
-  max_total_sequence_length: 16384
+  max_total_sequence_length: 4096
   train_global_batch_size: 504
   train_micro_batch_size: 1
   logprob_batch_size: 1
@@ -36,17 +35,17 @@ policy:
       resources:
         num_nodes: 2
         gpus_per_node: 8
-    max_new_tokens: 15360
+    max_new_tokens: 3072
     vllm_cfg:
       async_engine: false
       tensor_parallel_size: 8
       gpu_memory_utilization: 0.85
-      max_model_len: 16384
+      max_model_len: 4096
 
   megatron_cfg:
     tensor_model_parallel_size: 4
     pipeline_model_parallel_size: 1
-    context_parallel_size: 2
+    context_parallel_size: 1
     expert_model_parallel_size: 8
     sequence_parallel: true
     activation_checkpointing: true
@@ -67,7 +66,7 @@ optimizer:
 
 data:
   shuffle: false
-  max_input_seq_length: 16384
+  max_input_seq_length: 4096
 
 env:
   erdos_discovery:
@@ -78,14 +77,14 @@ env:
 
 cluster:
   gpus_per_node: 8
-  num_nodes: 10
+  num_nodes: 8
 
 logger:
   log_dir: "results/erdos-120b"
   wandb_enabled: true
   wandb:
     project: "ttt-discover-erdos"
-    name: "nemotron-120b-16k-10node"
+    name: "nemotron-120b-4k-50steps"
   tensorboard_enabled: false
   mlflow_enabled: false
   swanlab_enabled: false

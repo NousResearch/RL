@@ -81,8 +81,8 @@ python examples/run_discover.py \
 echo "Submitting Erdős TTT-Discover 120B (8k seq, wandb)..."
 echo "  Container: $CONTAINER"
 echo "  Model:     $MODEL_PATH"
-echo "  Nodes:     10 (2 inference + 8 training)"
-echo "  Seq len:   16384"
+echo "  Nodes:     8 (2 inference + 6 training)"
+echo "  Seq len:   4096"
 echo "  Exp:       $EXP"
 
 COMMAND="$COMMAND" \
@@ -90,7 +90,7 @@ CONTAINER="$CONTAINER" \
 MOUNTS="$MOUNTS" \
 GPUS_PER_NODE=8 \
 sbatch \
-  --nodes=10 --partition=batch --exclusive \
+  --nodes=8 --partition=batch --exclusive \
   --job-name=erdos-120b --time=12:00:00 \
   --output="$EXP/slurm-%j.out" \
   --error="$EXP/slurm-%j.err" \
