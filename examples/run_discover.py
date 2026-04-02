@@ -274,10 +274,12 @@ def main():
             grpo_state, master_config,
         )
     elif n == 10:
-        # v0.5.0 container
-        (policy, policy_generation, dataloader, val_dataloader,
-         loss_fn, nemo_logger, checkpointer, grpo_state,
-         master_config, _extra) = setup_list
+        # v0.5.0 container: Policy, VllmGen, clusters, train_dl, val_dl,
+        #   loss_fn, logger, checkpointer, grpo_state, master_config
+        (policy, policy_generation, _clusters,
+         dataloader, val_dataloader,
+         loss_fn, nemo_logger, checkpointer,
+         grpo_state, master_config) = setup_list
         # Ensure checkpointing exists in master_config
         if "checkpointing" not in master_config:
             master_config["checkpointing"] = config.get("checkpointing", {
