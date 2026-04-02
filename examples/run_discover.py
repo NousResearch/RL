@@ -256,6 +256,13 @@ def main():
         (policy, policy_generation, _nemo_gym, _clusters,
          dataloader, val_dataloader, loss_fn,
          nemo_logger, checkpointer, grpo_state, master_config) = setup_list
+        # Ensure checkpointing exists in master_config
+        if "checkpointing" not in master_config:
+            master_config["checkpointing"] = config.get("checkpointing", {
+                "enabled": False,
+                "checkpoint_must_save_by": None,
+                "save_period": 999999,
+            })
         grpo_train(
             policy, policy_generation,
             dataloader, val_dataloader,
@@ -269,6 +276,13 @@ def main():
         (policy, policy_generation, dataloader, val_dataloader,
          loss_fn, nemo_logger, checkpointer, grpo_state,
          master_config, _extra) = setup_list
+        # Ensure checkpointing exists in master_config
+        if "checkpointing" not in master_config:
+            master_config["checkpointing"] = config.get("checkpointing", {
+                "enabled": False,
+                "checkpoint_must_save_by": None,
+                "save_period": 999999,
+            })
         grpo_train(
             policy, policy_generation,
             dataloader, val_dataloader,
