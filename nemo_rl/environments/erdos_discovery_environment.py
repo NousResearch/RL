@@ -179,34 +179,57 @@ def _execute_run_function(code: str, timeout: int = 1000, n_cpus: int = 2) -> di
             except Exception as e:
                 result_queue.put({"error": f"{type(e).__name__}: {str(e)[:300]}"})
 
-        # Try simple exec first with a short thread-based timeout
-        # For most invalid code this returns instantly
-        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+        # Use multiprocessing with kill() for hard timeout
+        import multiprocessing as _mp
+        import pickle as _pickle
 
-        def _exec_with_timeout():
-            exec(compile(code, "<llm>", "exec"), namespace)
-            if "run" not in namespace:
-                return {"error": "No 'run' function defined"}
-            result = namespace["run"](seed=42, budget_s=min(timeout, 60))
-            return {"result": result}
+        _EXEC_TIMEOUT = min(timeout, 120)
 
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(_exec_with_timeout)
+        def _worker_fn(code_str, q):
+            import signal
+            signal.signal(signal.SIGALRM, lambda s, f: (_ for _ in ()).throw(Exception("timeout")))
+            signal.alarm(_EXEC_TIMEOUT)
             try:
-                exec_result = future.result(timeout=min(timeout, 120))
-            except FuturesTimeout:
-                # Thread is stuck — it will be abandoned when pool is GC'd
-                return {
-                    "reward": 0.0, "raw_score": None,
-                    "error_msg": f"Execution timed out after {min(timeout, 120)}s",
-                    "stdout": "".join(stdout_capture),
-                }
+                ns = {}
+                ns["__builtins__"] = __builtins__ if isinstance(__builtins__, dict) else __builtins__.__dict__.copy()
+                import numpy, math, random
+                ns.update({"np": numpy, "numpy": numpy, "math": math, "random": random})
+                def _eval(h, c, n):
+                    from erdos_verify import verify_c5_solution as _v
+                    _v(h, c, n)
+                    return float(c)
+                ns["evaluate_erdos_solution"] = lambda h, c, n: float(c)
+                exec(compile(code_str, "<llm>", "exec"), ns)
+                if "run" not in ns:
+                    q.put({"error": "No 'run' function defined"})
+                    return
+                out = ns["run"](seed=42, budget_s=_EXEC_TIMEOUT)
+                q.put({"result": (out[0].tolist() if hasattr(out[0], 'tolist') else list(out[0]), float(out[1]), int(out[2]))})
             except Exception as e:
-                return {
-                    "reward": 0.0, "raw_score": None,
-                    "error_msg": f"{type(e).__name__}: {str(e)[:300]}",
-                    "stdout": "".join(stdout_capture),
-                }
+                q.put({"error": f"{type(e).__name__}: {str(e)[:300]}"})
+
+        q = _mp.Queue()
+        p = _mp.Process(target=_worker_fn, args=(code, q))
+        p.start()
+        p.join(timeout=_EXEC_TIMEOUT + 5)
+
+        if p.is_alive():
+            p.kill()
+            p.join(timeout=5)
+            return {
+                "reward": 0.0, "raw_score": None,
+                "error_msg": f"Execution killed after {_EXEC_TIMEOUT}s timeout",
+                "stdout": "".join(stdout_capture),
+            }
+
+        if q.empty():
+            return {
+                "reward": 0.0, "raw_score": None,
+                "error_msg": "Worker process died without result",
+                "stdout": "".join(stdout_capture),
+            }
+
+        exec_result = q.get_nowait()
 
         if "error" in exec_result:
             return {
@@ -215,17 +238,13 @@ def _execute_run_function(code: str, timeout: int = 1000, n_cpus: int = 2) -> di
                 "stdout": "".join(stdout_capture),
             }
 
-        result = exec_result["result"]
+        raw = exec_result["result"]
+        h_values = np.asarray(raw[0], dtype=np.float64)
+        c5_bound = raw[1]
+        n_points = raw[2]
+        result = (h_values, c5_bound, n_points)
 
-        if not isinstance(result, tuple) or len(result) != 3:
-            return {
-                "reward": 0.0, "raw_score": None,
-                "error_msg": f"run() must return (h_values, c5_bound, n_points), got {type(result)}",
-                "stdout": "".join(stdout_capture),
-            }
 
-        h_values, c5_bound, n_points = result
-        h_values = np.asarray(h_values, dtype=np.float64)
 
         # Verify
         computed_c5 = verify_c5_solution(h_values, c5_bound, n_points)
