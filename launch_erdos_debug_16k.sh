@@ -13,7 +13,6 @@ COMMAND="
 export HF_HUB_ENABLE_HF_TRANSFER=0
 export TORCH_CUDA_ARCH_LIST='9.0 10.0'
 export NRL_IGNORE_VERSION_MISMATCH=1
-export PYTHONPATH=/home/mormio/RL:\${PYTHONPATH:-}
 export ERDOS_LOG_DIR=/home/mormio/RL/results/erdos_debug_outputs
 
 SRC=/home/mormio/RL

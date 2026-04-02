@@ -229,6 +229,22 @@ def main():
         setup_discover_data(config, tokenizer)
     )
 
+    # Ensure checkpointing config exists (some container versions require it)
+    if "checkpointing" not in config:
+        config["checkpointing"] = {
+            "enabled": False,
+            "checkpoint_dir": "results/erdos",
+            "save_period": 999999,
+            "checkpoint_must_save_by": None,
+            "model_save_format": "safetensors",
+            "save_consolidated": False,
+            "metric_name": "total_reward/mean",
+            "higher_is_better": True,
+            "keep_top_k": 1000000,
+        }
+    elif config["checkpointing"].get("checkpoint_must_save_by") is None:
+        config["checkpointing"]["checkpoint_must_save_by"] = None
+
     # Setup returns vary across container versions
     setup_result = setup(config, tokenizer, train_dataset, val_dataset)
     setup_list = list(setup_result)
