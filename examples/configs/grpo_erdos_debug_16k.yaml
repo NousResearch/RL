@@ -25,7 +25,7 @@ policy:
   tokenizer:
     name: "Qwen/Qwen2.5-1.5B-Instruct"
     chat_template_kwargs: null
-  max_total_sequence_length: 16384
+  max_total_sequence_length: 4096
   train_global_batch_size: 32
   train_micro_batch_size: 4
   dtensor_cfg:
@@ -41,7 +41,7 @@ policy:
     dropout: 0.0
   generation:
     backend: "vllm"
-    max_new_tokens: 15360
+    max_new_tokens: 3072
     temperature: 1.0
     top_p: 1.0
     stop_token_ids: null
@@ -52,7 +52,7 @@ policy:
       pipeline_parallel_size: 1
       expert_parallel_size: 1
       gpu_memory_utilization: 0.6
-      max_model_len: 16384
+      max_model_len: 4096
   dynamic_batching:
     enabled: false
 
