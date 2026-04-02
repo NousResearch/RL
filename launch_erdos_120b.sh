@@ -26,6 +26,7 @@ export UCX_NET_DEVICES=bond0 && \
 export HF_HUB_ENABLE_HF_TRANSFER=0 && \
 export TORCH_CUDA_ARCH_LIST='9.0 10.0' && \
 export NRL_IGNORE_VERSION_MISMATCH=1 && \
+export ERDOS_LOG_DIR=/home/mormio/RL/results/erdos_outputs && \
 export WANDB_API_KEY=$WANDB_API_KEY && \
 
 SRC=/home/mormio/RL
@@ -80,8 +81,8 @@ python examples/run_discover.py \
 echo "Submitting Erdős TTT-Discover 120B (8k seq, wandb)..."
 echo "  Container: $CONTAINER"
 echo "  Model:     $MODEL_PATH"
-echo "  Nodes:     8 (2 inference + 6 training)"
-echo "  Seq len:   8192"
+echo "  Nodes:     10 (2 inference + 8 training)"
+echo "  Seq len:   16384"
 echo "  Exp:       $EXP"
 
 COMMAND="$COMMAND" \
@@ -89,7 +90,7 @@ CONTAINER="$CONTAINER" \
 MOUNTS="$MOUNTS" \
 GPUS_PER_NODE=8 \
 sbatch \
-  --nodes=8 --partition=batch --exclusive \
+  --nodes=10 --partition=batch --exclusive \
   --job-name=erdos-120b --time=12:00:00 \
   --output="$EXP/slurm-%j.out" \
   --error="$EXP/slurm-%j.err" \

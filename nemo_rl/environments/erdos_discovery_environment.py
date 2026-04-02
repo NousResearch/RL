@@ -564,6 +564,42 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
             f"{'='*60}"
         )
 
+        # Save outputs to JSONL for debugging
+        import json, os
+        self.total_verified  # use as step counter proxy
+        step_num = getattr(self, '_step_count', 0) + 1
+        self._step_count = step_num
+        log_dir = os.environ.get("ERDOS_LOG_DIR", "/tmp/erdos_outputs")
+        os.makedirs(log_dir, exist_ok=True)
+        out_path = os.path.join(log_dir, f"step_{step_num:03d}.jsonl")
+        try:
+            with open(out_path, "w") as fout:
+                # Save a sample: first 10 + all valid ones
+                for idx in range(batch_size):
+                    r = float(rewards[idx])
+                    save_this = (idx < 10) or (r > 0)
+                    if not save_this:
+                        continue
+                    response = ""
+                    for msg in reversed(message_log_batch[idx]):
+                        if msg.get("role") == "assistant":
+                            response = msg.get("content", "")
+                            break
+                    meta = updated_metadata[idx] if idx < len(updated_metadata) else {}
+                    entry = {
+                        "idx": idx,
+                        "reward": r,
+                        "c5_bound": meta.get("c5_bound"),
+                        "error_msg": meta.get("error_msg", ""),
+                        "response_len": len(response),
+                        "response_preview": response[:500],
+                        "code_preview": _extract_code(response)[:500] if response else "",
+                    }
+                    fout.write(json.dumps(entry) + "\n")
+            print(f"   📝 Saved outputs to {out_path}")
+        except Exception as e:
+            print(f"   ⚠️ Failed to save outputs: {e}")
+
         return EnvironmentReturn(
             observations=observations,
             metadata=updated_metadata,
