@@ -250,6 +250,8 @@ def main():
     setup_list = list(setup_result)
     n = len(setup_list)
     print(f"  setup() returned {n} values")
+    for i, v in enumerate(setup_list):
+        print(f"    [{i}] {type(v).__name__}: {str(v)[:80]}")
 
     if n == 11:
         # super-v3 container
