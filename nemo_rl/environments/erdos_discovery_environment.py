@@ -183,12 +183,12 @@ def _execute_run_function(code: str, timeout: int = 1000, n_cpus: int = 2) -> di
         import multiprocessing as _mp
         import pickle as _pickle
 
-        _EXEC_TIMEOUT = min(timeout, 120)
+        _EXEC_TIMEOUT = min(timeout, 1000)
 
         def _worker_fn(code_str, q):
             import signal
             signal.signal(signal.SIGALRM, lambda s, f: (_ for _ in ()).throw(Exception("timeout")))
-            signal.alarm(_EXEC_TIMEOUT)
+            signal.alarm(_EXEC_TIMEOUT - 5)  # 5s grace before hard kill
             try:
                 ns = {}
                 ns["__builtins__"] = __builtins__ if isinstance(__builtins__, dict) else __builtins__.__dict__.copy()
@@ -203,7 +203,7 @@ def _execute_run_function(code: str, timeout: int = 1000, n_cpus: int = 2) -> di
                 if "run" not in ns:
                     q.put({"error": "No 'run' function defined"})
                     return
-                out = ns["run"](seed=42, budget_s=_EXEC_TIMEOUT)
+                out = ns["run"](seed=42, budget_s=_EXEC_TIMEOUT - 10)
                 q.put({"result": (out[0].tolist() if hasattr(out[0], 'tolist') else list(out[0]), float(out[1]), int(out[2]))})
             except Exception as e:
                 q.put({"error": f"{type(e).__name__}: {str(e)[:300]}"})
@@ -211,7 +211,7 @@ def _execute_run_function(code: str, timeout: int = 1000, n_cpus: int = 2) -> di
         q = _mp.Queue()
         p = _mp.Process(target=_worker_fn, args=(code, q))
         p.start()
-        p.join(timeout=_EXEC_TIMEOUT + 5)
+        p.join(timeout=_EXEC_TIMEOUT + 10)
 
         if p.is_alive():
             p.kill()
