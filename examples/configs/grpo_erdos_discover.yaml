@@ -91,6 +91,6 @@ logger:
   swanlab_enabled: false
 
 checkpointing:
-  enabled: true
+  enabled: false
   checkpoint_dir: "results/erdos-120b"
   save_period: 5
