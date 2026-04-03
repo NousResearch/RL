@@ -4,7 +4,7 @@ set -euo pipefail
 cd /home/mormio/RL
 
 CONTAINER="/home/shared/containers/nemo-rl-super-v3.sqsh"
-MODEL_PATH="/home/shared/models/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16"
+MODEL_PATH="/home/shared/models/NVIDIA-Nemotron-3-Super-120B-A12B-BF16"
 EXP="results/erdos-120b-$(date +%Y%m%d_%H%M)"
 mkdir -p "$EXP"
 
