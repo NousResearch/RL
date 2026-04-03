@@ -66,12 +66,14 @@ optimizer:
 
 data:
   shuffle: false
+  num_workers: 0  # PUCT training: dataset must run on driver (Ray select)
   max_input_seq_length: 4096
 
 env:
   erdos_discovery:
     num_initial_states: 16
-    num_groups_per_step: 8
+    # Must match grpo.num_prompts_per_step (run_discover enforces ref-style PUCT batch_size).
+    puct_seed_batch_size: 8
     sandbox_timeout: 1000
   should_use_nemo_gym: false
 

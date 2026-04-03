@@ -14,6 +14,7 @@ Key differences from our v1:
 import asyncio
 import logging
 import math
+import os
 import re
 import signal
 import time
@@ -28,6 +29,11 @@ from nemo_rl.environments.interfaces import (
     EnvironmentReturn,
 )
 from nemo_rl.data.interfaces import LLMMessageLogType
+from nemo_rl.environments.erdos_ref_puct_sampler import (
+    ErdosRefPUCTSampler,
+    ErdosRefState,
+    erdos_ref_state_to_prompt_state,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -336,6 +342,20 @@ def create_initial_state(rng=None):
     }
 
 
+def erdos_ref_state_from_create_initial(rng: np.random.Generator) -> ErdosRefState:
+    """Match ttt-discover-ref ErdosMinOverlapEnv.create_initial_state → State."""
+    d = create_initial_state(rng)
+    return ErdosRefState(
+        timestep=-1,
+        construction=list(d["construction"]),
+        code="",
+        value=-float(d["c5_bound"]),
+        parent_values=[],
+        parents=[],
+        observation="",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Prompt construction (from reference State.to_prompt + ErdosMinOverlapEnv.get_question)
 # ═══════════════════════════════════════════════════════════════════
@@ -480,7 +500,11 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
     def __init__(self, config: dict = None):
         config = config or {}
         self.sandbox_timeout = config.get("sandbox_timeout", 1000)
-        self.num_initial_states = config.get("num_initial_states", 16)
+        self.num_initial_states = int(config.get("num_initial_states", 8))
+        self.puct_c = float(config.get("puct_c", 1.0))
+        self.puct_seed_batch_size = int(
+            config.get("puct_seed_batch_size", self.num_initial_states)
+        )
 
         # Tracking
         self.best_reward = 0.0
@@ -488,21 +512,43 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
         self.total_verified = 0
         self.total_valid = 0
 
-        # PUCT buffer for state management
-        self._states = []
-        self._initialize_states()
+        log_dir = config.get("puct_log_dir") or os.environ.get(
+            "ERDOS_PUCT_LOG_DIR", "/tmp/erdos_puct"
+        )
+        os.makedirs(log_dir, exist_ok=True)
+        sampler_path = os.path.join(log_dir, "puct_sampler.json")
+        resume_step = config.get("puct_resume_step")
+        if resume_step is not None:
+            resume_step = int(resume_step)
 
-    def _initialize_states(self):
-        """Generate initial random states."""
-        rng = np.random.default_rng(42)
-        for _ in range(self.num_initial_states):
-            self._states.append(create_initial_state(rng))
+        self.sampler = ErdosRefPUCTSampler(
+            file_path=sampler_path,
+            init_state_fn=lambda: erdos_ref_state_from_create_initial(
+                np.random.default_rng()
+            ),
+            max_buffer_size=int(config.get("puct_max_buffer_size", 1000)),
+            batch_size=self.puct_seed_batch_size,
+            resume_step=resume_step,
+            puct_c=self.puct_c,
+            topk_children=int(config.get("puct_topk_children", 2)),
+            max_construction_len=int(config.get("puct_max_construction_len", 1000)),
+        )
 
     def get_initial_states(self, n: int = None) -> list[dict]:
-        """Return initial states for prompt generation."""
-        if n is None:
-            return self._states
-        return self._states[:n]
+        """Random states (e.g. validation). Training uses puct_sample_states()."""
+        rng = np.random.default_rng(42)
+        k = n if n is not None else self.num_initial_states
+        return [create_initial_state(rng) for _ in range(k)]
+
+    def puct_sample_states(self, num_prompts: int) -> list[dict]:
+        """ttt-discover-ref PUCTSampler.sample_states — prompts + serial parent State."""
+        picked = self.sampler.sample_states(num_prompts)
+        out: list[dict] = []
+        for s in picked:
+            prompt_state = erdos_ref_state_to_prompt_state(s)
+            prompt_state["erdos_ref_state"] = s.to_dict()
+            out.append(prompt_state)
+        return out
 
     def step(
         self,
@@ -533,6 +579,8 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
 
         import time as _time
         _t0 = _time.time()
+        step_num = getattr(self, "_step_count", 0) + 1
+        self._step_count = step_num
         print(f"[{_time.strftime('%H:%M:%S')}] 🧪 Starting reward computation for {batch_size} rollouts")
 
         for i, message_log in enumerate(message_log_batch):
@@ -558,6 +606,14 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
             # Inject initial_h_values from state if available
             state = metadata[i] if i < len(metadata) else {}
             construction = state.get("construction", None)
+            parent_erdos: Optional[ErdosRefState] = None
+            raw_parent = state.get("erdos_ref_state")
+            if raw_parent is not None:
+                try:
+                    parent_erdos = ErdosRefState.from_dict(raw_parent)
+                except Exception as e:
+                    logger.warning("Invalid erdos_ref_state in metadata: %s", e)
+
             preamble = "import numpy as np\n\n"
             if construction:
                 preamble += f"initial_h_values = np.array({construction!r})\n\n"
@@ -581,6 +637,28 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
                     print(f"🏆 NEW BEST C5: {c5:.6f} (reward={reward:.4f})")
 
                 answers[i] = f"C5={c5:.6f}" if c5 else f"reward={reward:.4f}"
+
+            if parent_erdos is not None:
+                if (
+                    reward > 0
+                    and c5 is not None
+                    and result.get("result_construction") is not None
+                ):
+                    child = ErdosRefState(
+                        timestep=step_num,
+                        construction=list(result["result_construction"]),
+                        code=code,
+                        value=-float(c5),
+                        observation=str(result.get("stdout", "") or ""),
+                    )
+                    try:
+                        self.sampler.update_states(
+                            [child], [parent_erdos], save=False
+                        )
+                    except Exception as e:
+                        logger.warning("PUCT update_states failed: %s", e)
+                else:
+                    self.sampler.record_failed_rollout(parent_erdos)
 
             if i < len(updated_metadata):
                 updated_metadata[i] = {
@@ -611,10 +689,8 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
         )
 
         # Save outputs to JSONL for debugging
-        import json, os
-        self.total_verified  # use as step counter proxy
-        step_num = getattr(self, '_step_count', 0) + 1
-        self._step_count = step_num
+        import json
+
         log_dir = os.environ.get("ERDOS_LOG_DIR", "/tmp/erdos_outputs")
         os.makedirs(log_dir, exist_ok=True)
         out_path = os.path.join(log_dir, f"step_{step_num:03d}.jsonl")
@@ -645,6 +721,11 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
             print(f"   📝 Saved outputs to {out_path}")
         except Exception as e:
             print(f"   ⚠️ Failed to save outputs: {e}")
+
+        try:
+            self.sampler.flush(step_num)
+        except Exception as e:
+            logger.warning("PUCT flush failed: %s", e)
 
         return EnvironmentReturn(
             observations=observations,
@@ -696,5 +777,11 @@ class ErdosDiscoveryEnvironment(EnvironmentInterface):
         print(f"  🎯 Erdős: avg_reward={avg_r:.4f} max_reward={max_r:.4f} "
               f"valid={batch_valid}/{len(metadata)} "
               f"best_c5={best}")
+
+        try:
+            for k, v in self.sampler.get_sample_stats().items():
+                metrics[f"erdos/{k}"] = float(v)
+        except Exception:
+            pass
 
         return metadata, metrics

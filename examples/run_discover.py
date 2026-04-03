@@ -65,17 +65,21 @@ def generate_discover_datum(
         msg_ids = tokenizer.encode(msg_text, add_special_tokens=False)
         msg["token_ids"] = torch.tensor(msg_ids, dtype=torch.long)
 
+    extra = {
+        "construction": state.get("construction"),
+        "c5_bound": state.get("c5_bound"),
+        "n_points": state.get("n_points"),
+        "code": state.get("code", ""),
+        "parent_c5": state.get("parent_c5"),
+        "observation": state.get("observation", ""),
+    }
+    if state.get("erdos_ref_state") is not None:
+        extra["erdos_ref_state"] = state["erdos_ref_state"]
+
     return DatumSpec(
         message_log=messages,
         length=len(prompt_ids),
-        extra_env_info={
-            "construction": state.get("construction"),
-            "c5_bound": state.get("c5_bound"),
-            "n_points": state.get("n_points"),
-            "code": state.get("code", ""),
-            "parent_c5": state.get("parent_c5"),
-            "observation": state.get("observation", ""),
-        },
+        extra_env_info=extra,
         loss_multiplier=1.0,
         idx=idx,
         task_name=task_name,
@@ -83,20 +87,56 @@ def generate_discover_datum(
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Dataset backed by initial states (PUCT selection comes later)
+# Datasets: PUCT (train) vs random (val)
 # ═══════════════════════════════════════════════════════════════════
 
 
-class DiscoverDataset(IterableDataset):
-    """Dataset that generates prompts from Erdős initial states.
+class PUCTDiscoverDataset(IterableDataset):
+    """Training dataset: pulls PUCT-selected states from the Ray env actor.
 
-    Each iteration generates diverse initial states and yields them as
-    DatumSpecs with the reference TTT-Discover prompt format.
-
-    For now, initial states are random perturbations of h=0.5 (matching
-    the reference). Future: PUCT buffer selects states based on prior
-    discoveries.
+    Matches ttt-discover-ref: ``ErdosRefPUCTSampler.sample_states(num_prompts)``
+    (distinct parent states per step). The env updates the sampler in
+    ``ErdosDiscoveryEnvironment._sync_step`` via ``update_states`` /
+    ``record_failed_rollout`` and ``flush``. Requires ``data.num_workers == 0``.
     """
+
+    def __init__(
+        self,
+        tokenizer,
+        env_actor,
+        num_prompts_per_step: int,
+        task_name: str = "erdos_discovery",
+        length: int = 1000,
+    ):
+        self.tokenizer = tokenizer
+        self._env = env_actor
+        self.num_prompts_per_step = num_prompts_per_step
+        self.task_name = task_name
+        self.length = length
+        self._idx_counter = itertools.count()
+
+    def __iter__(self):
+        for _ in itertools.count():
+            states = ray.get(
+                self._env.puct_sample_states.remote(
+                    self.num_prompts_per_step,
+                )
+            )
+            for state in states:
+                idx = next(self._idx_counter)
+                yield generate_discover_datum(
+                    self.tokenizer,
+                    state,
+                    idx=idx,
+                    task_name=self.task_name,
+                )
+
+    def __len__(self):
+        return self.length
+
+
+class RandomDiscoverDataset(IterableDataset):
+    """Random warm-starts (e.g. validation) — does not touch the PUCT sampler."""
 
     def __init__(
         self,
@@ -115,7 +155,6 @@ class DiscoverDataset(IterableDataset):
 
     def __iter__(self):
         for _ in itertools.count():
-            # Generate fresh initial states each step
             for _ in range(self.num_states_per_step):
                 state = create_initial_state(self._rng)
                 idx = next(self._idx_counter)
@@ -137,31 +176,50 @@ class DiscoverDataset(IterableDataset):
 
 def setup_discover_data(config: MasterConfig, tokenizer):
     """Create dataset, environment, and wire them together."""
-    env_config = config.get("env", {}).get("erdos_discovery", {})
-    num_states = config.get("grpo", {}).get("num_prompts_per_step", 8)
+    base_env = config.get("env", {}).get("erdos_discovery", {})
+    env_config = dict(base_env) if isinstance(base_env, dict) else {}
+    num_states = int(config.get("grpo", {}).get("num_prompts_per_step", 8))
     task_name = "erdos_discovery"
 
-    train_dataset = DiscoverDataset(
-        tokenizer=tokenizer,
-        num_states_per_step=num_states,
-        task_name=task_name,
-        length=config.get("grpo", {}).get("max_num_steps", 50) * num_states,
-        seed=config.get("seed", 42),
-    )
+    # Ref parity: cold-start seed count must match prompts per step (PUCT batch_size).
+    seed_bs = int(env_config.get("puct_seed_batch_size", num_states))
+    if seed_bs != num_states:
+        logger.warning(
+            "Overriding puct_seed_batch_size %s -> %s to match grpo.num_prompts_per_step "
+            "(ttt-discover-ref PUCT batch_size).",
+            seed_bs,
+            num_states,
+        )
+    env_config["puct_seed_batch_size"] = num_states
 
-    val_dataset = DiscoverDataset(
-        tokenizer=tokenizer,
-        num_states_per_step=num_states,
-        task_name=task_name,
-        length=num_states,
-        seed=config.get("seed", 42) + 1,
-    )
+    data_cfg = config.get("data", {})
+    if int(data_cfg.get("num_workers", 0)) != 0:
+        logger.warning(
+            "Setting data.num_workers=0 for Erdős PUCT (dataset calls Ray on the driver)."
+        )
+        config["data"] = {**data_cfg, "num_workers": 0}
 
     env = ErdosDiscoveryEnvironment.options(
         num_gpus=0,
         max_restarts=-1,
         max_task_retries=-1,
     ).remote(config=env_config)
+
+    train_dataset = PUCTDiscoverDataset(
+        tokenizer=tokenizer,
+        env_actor=env,
+        num_prompts_per_step=num_states,
+        task_name=task_name,
+        length=config.get("grpo", {}).get("max_num_steps", 50) * num_states,
+    )
+
+    val_dataset = RandomDiscoverDataset(
+        tokenizer=tokenizer,
+        num_states_per_step=num_states,
+        task_name=task_name,
+        length=num_states,
+        seed=config.get("seed", 42) + 1,
+    )
 
     task_to_env = {task_name: env}
     val_task_to_env = {task_name: env}

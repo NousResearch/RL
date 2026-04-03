@@ -61,11 +61,12 @@ optimizer:
 
 data:
   shuffle: false
+  num_workers: 0  # required: PUCT dataset calls Ray from the iterator process
 
 env:
   erdos_discovery:
     num_initial_states: 8
-    num_groups_per_step: 4
+    puct_seed_batch_size: 4
     sandbox_timeout: 120
 
 checkpointing:
