@@ -27,12 +27,12 @@ export HF_HUB_ENABLE_HF_TRANSFER=0 && \
 export TORCH_CUDA_ARCH_LIST='9.0 10.0' && \
 export NRL_IGNORE_VERSION_MISMATCH=1 && \
 export ERDOS_LOG_DIR=/home/mormio/RL/results/erdos_outputs && \
+export ERDOS_PUCT_LOG_DIR=/home/mormio/RL/results/erdos_puct && \
 export WANDB_API_KEY=$WANDB_API_KEY && \
 
 SRC=/home/mormio/RL
 cp \$SRC/nemo_rl/algorithms/entropic_advantage_estimator.py /opt/nemo-rl/nemo_rl/algorithms/
 cp \$SRC/nemo_rl/environments/erdos_discovery_environment.py /opt/nemo-rl/nemo_rl/environments/
-cp \$SRC/nemo_rl/utils/puct_buffer.py /opt/nemo-rl/nemo_rl/utils/
 cp \$SRC/nemo_rl/environments/erdos_ref_puct_sampler.py /opt/nemo-rl/nemo_rl/environments/
 cp \$SRC/examples/run_discover.py /opt/nemo-rl/examples/
 cp \$SRC/examples/configs/grpo_erdos_discover.yaml /opt/nemo-rl/examples/configs/

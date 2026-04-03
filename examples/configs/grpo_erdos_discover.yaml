@@ -70,8 +70,8 @@ data:
 
 env:
   erdos_discovery:
-    num_initial_states: 16
-    num_groups_per_step: 8
+    num_initial_states: 8  # matches num_prompts_per_step
+    puct_seed_batch_size: 8  # matches num_prompts_per_step
     sandbox_timeout: 1000
   should_use_nemo_gym: false
 
