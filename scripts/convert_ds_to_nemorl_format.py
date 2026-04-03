@@ -61,10 +61,18 @@ def convert_sample(sample: dict) -> dict:
         messages.append({"role": role, "content": turn["value"]})
 
     if messages[-1]["role"] != "assistant":
-        raise ValueError(
-            f"Last turn must be from the assistant, got '{messages[-1]['role']}' "
-            f"in sample id={sample.get('id')}"
+        # Some trajectories end with a tool response (agent called a tool but the
+        # conversation was cut before the final reply). Truncate to the last
+        # assistant turn rather than discarding the whole sample.
+        last_assistant = next(
+            (i for i in range(len(messages) - 1, -1, -1) if messages[i]["role"] == "assistant"),
+            None,
         )
+        if last_assistant is None:
+            raise ValueError(
+                f"No assistant turn found in sample id={sample.get('id')}"
+            )
+        messages = messages[: last_assistant + 1]
 
     result: dict = {"messages": messages}
 
@@ -124,15 +132,22 @@ def main() -> None:
 
     samples = []
     n_skipped = 0
+    n_truncated = 0
     for raw in ds:
         try:
-            samples.append(convert_sample(raw))
+            converted = convert_sample(raw)
+            # Detect truncation: fewer turns than the original conversation.
+            if len(converted["messages"]) < len(raw["conversations"]):
+                n_truncated += 1
+            samples.append(converted)
         except ValueError as e:
             print(f"  Skipping sample: {e}")
             n_skipped += 1
 
+    if n_truncated:
+        print(f"Truncated {n_truncated} samples to their last assistant turn (trailing tool responses dropped).")
     if n_skipped:
-        print(f"Skipped {n_skipped} malformed samples.")
+        print(f"Skipped {n_skipped} samples (no assistant turn found).")
 
     if args.val_split > 0:
         random.seed(args.seed)

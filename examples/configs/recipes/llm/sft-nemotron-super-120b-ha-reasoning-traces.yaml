@@ -1,0 +1,83 @@
+defaults: ../../sft.yaml
+sft:
+  max_num_steps: 50
+  val_period: 5
+  val_global_batch_size: 128
+
+checkpointing:
+  checkpoint_dir: results/sft_nemotron_super_120b_ha_reasoning_traces
+  metric_name: val:loss
+  keep_top_k: 100
+  save_period: 500
+
+policy:
+  model_name: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16
+  max_total_sequence_length: 65536
+  train_global_batch_size: 128
+  dtensor_cfg:
+    _v2: true
+    activation_checkpointing: true
+    context_parallel_size: 4
+    tensor_parallel_size: 4
+    custom_parallel_plan: examples.custom_parallel.llama_nemotron_super_49b_custom_plan.custom_parallel_plan
+    lora_cfg:
+      enabled: True            # Set to True to enable LoRA fine-tuning
+      target_modules: ["linear_qkv", "linear_proj", "linear_fc1", "linear_fc2", "in_proj", "out_proj"]
+      exclude_modules: ["lm_head"]
+      match_all_linear: true
+      dim: 32
+      alpha: 32
+      dropout: 0.0
+      dropout_position: "pre"
+      lora_A_init: "xavier"
+      use_triton: true
+  dynamic_batching:
+    train_mb_tokens: 4096
+    logprob_mb_tokens: 8192
+  make_sequence_length_divisible_by: ${max:${mul:${policy.dtensor_cfg.context_parallel_size},
+    2}, ${policy.max_total_sequence_length}}
+  max_grad_norm: null
+  optimizer:
+    kwargs:
+      lr: 1.0e-04
+      weight_decay: 0.1
+      eps: 1.0e-08
+      beta1: 0.9 #TODO: confirm this is the right config name, could be betas or adam_beta
+      beta2: 0.95
+  scheduler:
+  - name: torch.optim.lr_scheduler.LinearLR
+    kwargs:
+      start_factor: 0.1
+      end_factor: 1.0
+      total_iters: 10
+  - name: torch.optim.lr_scheduler.CosineAnnealingLR
+    kwargs:
+      T_max: 40
+      eta_min: 2.0e-06
+  - milestones:
+    - 10
+data:
+  num_workers: 20
+  train:
+    dataset_name: openai_format
+    data_path: /home/mormio/RL/data/lambda_hermes_agent_reasoning_traces/train.jsonl
+    chat_key: "messages"
+    tool_key: "tools"
+    use_preserving_dataset: false
+    seed: 42
+  validation:
+    dataset_name: openai_format
+    data_path: /home/mormio/RL/data/lambda_hermes_agent_reasoning_traces/validation.jsonl
+    chat_key: "messages"
+    tool_key: "tools"
+    use_preserving_dataset: false
+logger:
+  tensorboard_enabled: false
+  monitor_gpus: false
+  num_val_samples_to_print: 0
+  wandb:
+    project: nemotron-super-120b-ha-reasoning-traces
+    name: nemotron-super-120b-ha-reasoning-traces
+cluster:
+  gpus_per_node: 8
+  num_nodes: 1
