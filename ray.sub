@@ -49,6 +49,18 @@ maybe_gres_arg() {
 # User defined variables
 ########################################################
 export OMP_NUM_THREADS=16
+
+# NCCL IB config for multi-node training
+export NCCL_BUFFSIZE=33554432
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export NCCL_IB_AR_THRESHOLD=0
+export NCCL_IB_PCI_RELAXED_ORDERING=1
+export NCCL_IB_QPS_PER_CONNECTION=2
+export NCCL_IB_SPLIT_DATA_ON_QPS=0
+export NCCL_IGNORE_CPU_AFFINITY=1
+export NCCL_IB_HCA=mlx5_4:1,mlx5_7:1,mlx5_8:1,mlx5_9:1,mlx5_10:1,mlx5_13:1,mlx5_14:1,mlx5_15:1
+export NCCL_SOCKET_IFNAME=bond0
+export UCX_NET_DEVICES=bond0
 CONTAINER=$CONTAINER
 MOUNTS=$MOUNTS
 COMMAND=${COMMAND:-}  # This is a script relative to the SLURM_SUBMIT_DIR. If left empty, it will leave the cluster idle after it's brought up.
@@ -144,7 +156,8 @@ fi
 
 COMMON_SRUN_ARGS="$GRES_ARG"
 COMMON_SRUN_ARGS+=" --no-container-mount-home"
-COMMON_SRUN_ARGS+=" --mpi=pmix"
+COMMON_SRUN_ARGS+=" --mpi=pmi2"
+COMMON_SRUN_ARGS+=" --container-writable"
 COMMON_SRUN_ARGS+=" --container-mounts=$MOUNTS"
 COMMON_SRUN_ARGS+=" --container-image=$CONTAINER"
 COMMON_SRUN_ARGS+=" --container-workdir=$SLURM_SUBMIT_DIR"
@@ -438,9 +451,11 @@ EOF
 done
 
 # Then we wait here for the file to be created by the head node container
-while check_srun_processes && ! srun --overlap --nodes=1 --ntasks=1 -w $head_node test -f $LOG_DIR/STARTED_RAY_HEAD; do
+# Use direct filesystem check (shared NFS) instead of srun --overlap which fails
+# when all node resources are allocated to container sruns
+while check_srun_processes && ! test -f $LOG_DIR/STARTED_RAY_HEAD; do
   echo "[INFO][$(date)] Waiting for head node container to start..."
-  sleep 2
+  sleep 5
 done
 
 ########################################################
@@ -458,7 +473,7 @@ if [[ -n "${SANDBOX_CONTAINER:-}" ]] && [[ -n "${SANDBOX_COMMAND:-}" ]]; then
     --container-image="$SANDBOX_CONTAINER" \
     --container-mounts="$SANDBOX_PORTS_DIR:$SANDBOX_PORTS_DIR" \
     --no-container-mount-home \
-    --mpi=pmix \
+    --mpi=pmi2 \
     -A "$SLURM_JOB_ACCOUNT" \
     -p "$SLURM_JOB_PARTITION" \
     --wait=60 \
@@ -480,11 +495,10 @@ fi
 # We do so by querying the number of worker_units in the ray cluster and asserting = NUM_ACTORS
 
 # Helper function to get container PID using enroot
-# Since we use -w to target specific nodes and only run one container per node,
-# we can just grab the first (and only) container PID on that node
+# Uses ssh instead of srun --overlap (which fails when all resources are allocated)
 get_container_pid() {
   local node=$1
-  srun --overlap --nodes=1 -w "$node" bash -c "enroot list -f | awk 'NR>1 && \$2 ~ /^[0-9]+\$/ {print \$2; exit}'"
+  ssh -o StrictHostKeyChecking=no "$node" "enroot list -f | awk 'NR>1 && \$2 ~ /^[0-9]+\$/ {print \$2; exit}'" 2>/dev/null
 }
 
 extract_worker_units() {
@@ -495,8 +509,8 @@ extract_worker_units() {
     return
   fi
   
-  # Execute ray status inside the container using enroot exec
-  status_output=$(srun --overlap --nodes=1 -w "$head_node" enroot exec "$head_container_pid" ray status)
+  # Execute ray status inside the container using enroot exec via ssh
+  status_output=$(ssh -o StrictHostKeyChecking=no "$head_node" "enroot exec $head_container_pid ray status" 2>/dev/null)
   if echo "$status_output" | grep -q "worker_units"; then
     worker_units=$(echo "$status_output" | grep "worker_units" | awk -F'[/. ]' '{print $4}')
     echo $worker_units
@@ -516,7 +530,7 @@ while true; do
     break
   fi
   check_srun_processes
-  sleep 2
+  sleep 5
 done
 
 echo "All workers connected!"
@@ -526,9 +540,18 @@ echo "All workers connected!"
 # This driver process is responsible for launching a job on the Ray cluster
 CONTAINER_CWD=$(scontrol show job $SLURM_JOB_ID | grep -oP 'WorkDir=\K[^ ]+' | head -1)
 if [[ -n "$COMMAND" ]]; then
-  # Get container PID and execute command inside it
+  # Write driver command to a file (avoids shell quoting issues with ssh)
+  DRIVER_SCRIPT="$LOG_DIR/driver_command.sh"
+  cat > "$DRIVER_SCRIPT" <<DRIVER_EOF
+#!/bin/bash
+set -euo pipefail
+cd $CONTAINER_CWD
+$COMMAND
+DRIVER_EOF
+  chmod +x "$DRIVER_SCRIPT"
+  # Get container PID and execute command inside it via ssh
   head_container_pid=$(get_container_pid "$head_node")
-  srun --overlap --nodes=1 -w "$head_node" -o $LOG_DIR/ray-driver.log enroot exec "$head_container_pid" bash -c "cd $CONTAINER_CWD && $COMMAND"
+  ssh -o StrictHostKeyChecking=no "$head_node" "enroot exec $head_container_pid bash $DRIVER_SCRIPT" > $LOG_DIR/ray-driver.log 2>&1
 else
   echo "[INFO]: Ray Cluster is idled, run this on the slurm head node to get a shell to the head node:"
   cat <<EOF >$SLURM_SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh

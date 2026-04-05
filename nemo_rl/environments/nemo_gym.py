@@ -294,7 +294,12 @@ Depending on your data shape, you may want to change these values."""
             # Eventually we can maybe be smarter about this, but this is functional for now.
 
             # Note that NeMo-Gym will only return token ids on "assistant" messages and not other message types.
-            if "generation_token_ids" not in output_item_dict:
+            # Also skip items with empty/missing token IDs (e.g. hermes summary messages without logprobs).
+            if (
+                "generation_token_ids" not in output_item_dict
+                or not output_item_dict["generation_token_ids"]
+                or not output_item_dict.get("prompt_token_ids")
+            ):
                 continue
 
             prompt_token_ids_tensor = torch.tensor(output_item_dict["prompt_token_ids"])

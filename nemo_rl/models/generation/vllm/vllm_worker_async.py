@@ -634,8 +634,10 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
 
             # The request sampling params need to exactly match those as are set in NeMo RL.
             # If they do not match, the inference will be off policy and destroy training stability.
-            assert request.temperature == generation_config["temperature"]
-            assert request.top_p == generation_config["top_p"]
+            # NOTE: For hermes agent rollouts, the request comes from inside the SWE container
+            # and may not have the exact same temperature. Override to match generation config.
+            request.temperature = generation_config["temperature"]
+            request.top_p = generation_config["top_p"]
 
             generator = await openai_serving_chat.create_chat_completion(
                 request, raw_request
