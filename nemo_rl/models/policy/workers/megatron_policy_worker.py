@@ -1138,9 +1138,9 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             hasattr(self, "optimizer")
             and self.optimizer is not None
             and not self.optimizer_cpu_offload
-            and (self.offload_optimizer_for_logprob or self.is_generation_colocated)
+            # and (self.offload_optimizer_for_logprob or self.is_generation_colocated)
         ):
-            pass  # line 1141 deleted per NVIDIA guidance
+            self.move_optimizer("cuda")
 
         if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
             torch.cuda.empty_cache()
