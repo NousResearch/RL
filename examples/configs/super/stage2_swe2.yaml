@@ -53,7 +53,7 @@ grpo:
 
   async_grpo:
     enabled: true
-    max_trajectory_age_steps: 1
+    max_trajectory_age_steps: 7
     in_flight_weight_updates: true
     recompute_kv_cache_after_weight_updates: false
 
