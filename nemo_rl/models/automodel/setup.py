@@ -419,10 +419,11 @@ def setup_model_and_optimizer(
             # broadcasts it to every MultiLoRA submodule before forward.
             # Single-LoRA (num_adapters == 1) skips this — the hook is a no-op
             # but adds an unnecessary register_forward_pre_hook, so we gate it.
+            # The implementation lives in nousnet (NousResearch/nousnet) at
+            # ``nousnet.rl.lora.multi``. We import lazily so single-LoRA users
+            # (the default) do not require nousnet on PYTHONPATH.
             if getattr(peft_config, "num_adapters", 1) > 1:
-                from nemo_automodel.components._peft.multi_lora import (
-                    install_routing_pre_hook,
-                )
+                from nousnet.rl.lora.multi import install_routing_pre_hook
 
                 model._multi_lora_routing_hook = install_routing_pre_hook(model)
                 print(
