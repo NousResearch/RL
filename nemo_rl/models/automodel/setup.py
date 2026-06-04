@@ -414,6 +414,22 @@ def setup_model_and_optimizer(
         if lora_enabled:
             apply_lora_to_linear_modules(model, peft_config)
 
+            # Multi-adapter LoRA: install routing pre-hook on the model so the
+            # forward pass picks up `adapter_indices=...` from each batch and
+            # broadcasts it to every MultiLoRA submodule before forward.
+            # Single-LoRA (num_adapters == 1) skips this — the hook is a no-op
+            # but adds an unnecessary register_forward_pre_hook, so we gate it.
+            if getattr(peft_config, "num_adapters", 1) > 1:
+                from nemo_automodel.components._peft.multi_lora import (
+                    install_routing_pre_hook,
+                )
+
+                model._multi_lora_routing_hook = install_routing_pre_hook(model)
+                print(
+                    f"[multi-lora] Installed routing pre-hook "
+                    f"(num_adapters={peft_config.num_adapters})"
+                )
+
     # For activation checkpointing, we also must globally disable the cudnn SDPA backend
     # to ensure that cudnn does not get selected during recomputation.
     if config["dtensor_cfg"]["activation_checkpointing"]:
