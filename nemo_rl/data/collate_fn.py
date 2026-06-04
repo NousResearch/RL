@@ -70,6 +70,22 @@ def rl_collate_fn(data_batch: list[DatumSpec]) -> BatchedDataDict[Any]:
         stop_strings=stop_strings,
         **extra_args,
     )
+
+    # Multi-LoRA: stack per-sample adapter_id into adapter_indices.
+    # Only fires when ALL samples in the batch carry adapter_id — partial
+    # presence is treated as misconfigured data and raised, because
+    # downstream the routing pre-hook expects a (B,) tensor or nothing.
+    adapter_ids = [d.get("adapter_id") for d in data_batch]
+    n_set = sum(a is not None for a in adapter_ids)
+    if n_set == len(data_batch) and n_set > 0:
+        output["adapter_indices"] = torch.tensor(adapter_ids, dtype=torch.int64)
+    elif n_set > 0:
+        raise ValueError(
+            f"rl_collate_fn: adapter_id present on {n_set}/{len(data_batch)} "
+            "samples — must be all-or-nothing. Check your dataset / "
+            "processor to ensure every example has adapter_id when "
+            "using multi-LoRA training."
+        )
     return output
 
 

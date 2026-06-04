@@ -184,6 +184,13 @@ def sft_processor(
         "loss_multiplier": loss_multiplier,
         "idx": idx,
     }
+    # Multi-LoRA: propagate per-sample adapter_id if the dataset emitted one.
+    # The collator stacks these into batch["adapter_indices"] which the
+    # routing pre-hook (installed in Automodel/_transformers/infrastructure.py
+    # when peft_config.num_adapters > 1) reads to route each row to its
+    # adapter slot. Single-LoRA / no-LoRA paths simply ignore this field.
+    if "adapter_id" in datum_dict:
+        output["adapter_id"] = int(datum_dict["adapter_id"])
     return output
 
 

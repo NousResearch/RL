@@ -40,6 +40,7 @@ class DatumSpec(TypedDict):
     idx: int
     task_name: NotRequired[str]
     stop_strings: NotRequired[list[str]]  # Optional stop strings for generation
+    adapter_id: NotRequired[int]  # Multi-LoRA: which adapter slot to route this datum through
     __extra__: NotRequired[Any]  # This allows additional fields of any type
 
 
