@@ -449,6 +449,50 @@ def get_formatted_message_log(
     Returns:
         The message log with updated 'token_ids' and 'content' fields.
     """
+    # pr013 ARGNORM PATCH: OpenAI-format tool_call arguments arrive as JSON
+    # strings, but the Nemotron chat template does `arguments|items` (requires a
+    # dict). Normalize string args -> dict so the template renders the model's
+    # native <parameter=...> tool-call format. Raise loudly on unparseable args
+    # (no silent degradation). Idempotent: dicts pass through untouched.
+    import json as _pr013_json
+
+    def _pr013_normalize_tool_args(_msgs):
+        for _m in _msgs:
+            if not isinstance(_m, dict):
+                continue
+            _tcs = _m.get("tool_calls")
+            if not _tcs:
+                continue
+            for _tc in _tcs:
+                if not isinstance(_tc, dict):
+                    continue
+                # arguments may live under .function (OpenAI) or directly on _tc
+                for _holder in (_tc.get("function"), _tc):
+                    if not isinstance(_holder, dict) or "arguments" not in _holder:
+                        continue
+                    _a = _holder["arguments"]
+                    if not isinstance(_a, str):
+                        continue  # already a dict/object -> leave untouched
+                    _s = _a.strip()
+                    if _s == "":
+                        _holder["arguments"] = {}
+                        continue
+                    try:
+                        _parsed = _pr013_json.loads(_s)
+                    except Exception as _e:
+                        raise ValueError(
+                            "pr013 ARGNORM: tool_call.arguments is a string that is "
+                            "not valid JSON: %r (%s)" % (_a, _e)
+                        )
+                    if not isinstance(_parsed, dict):
+                        raise ValueError(
+                            "pr013 ARGNORM: tool_call.arguments parsed to %s, "
+                            "expected a JSON object/dict: %r"
+                            % (type(_parsed).__name__, _a)
+                        )
+                    _holder["arguments"] = _parsed
+
+    _pr013_normalize_tool_args(message_log)
     new_message_log: LLMMessageLogType = []
     prev_formatted_message = ""
     message_log_strs: list[dict[str, str]] = cast(

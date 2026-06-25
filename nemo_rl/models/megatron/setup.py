@@ -431,6 +431,15 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
 
     model_cfg.moe_permute_fusion = config["megatron_cfg"]["moe_permute_fusion"]
 
+    # pr013 FUSED-SQUARED-RELU PATCH: nemo-rl's allowlist plumbs moe_permute_fusion (above) but
+    # NOT use_fused_weighted_squared_relu, and the NemotronH provider leaves it at
+    # the TransformerConfig default (False). Without this line the YAML key is a
+    # silent no-op and the relu2 MoE takes the unfused activation path that OOMs in
+    # SequentialMLP.bias_act_func (bug #8). Bare lookup -> fail loud if key absent.
+    model_cfg.use_fused_weighted_squared_relu = config["megatron_cfg"][
+        "use_fused_weighted_squared_relu"
+    ]
+
 
 def _apply_precision_config(
     model_cfg: Any, config: PolicyConfig, dtype: torch.dtype
