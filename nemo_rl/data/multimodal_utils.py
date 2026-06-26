@@ -20,7 +20,10 @@ from collections import defaultdict
 from io import BytesIO
 from typing import Any, Optional, Union
 
-import decord
+try:
+    import decord
+except ImportError:
+    decord = None
 import requests
 import torch
 from PIL import Image
