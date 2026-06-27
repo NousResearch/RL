@@ -30,7 +30,10 @@ import ray
 import requests
 import swanlab
 import torch
-import wandb
+try:
+    import wandb
+except ImportError:
+    wandb = None
 from matplotlib import pyplot as plt
 from prometheus_client.parser import text_string_to_metric_families
 from prometheus_client.samples import Sample

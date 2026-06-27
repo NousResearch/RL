@@ -19,7 +19,10 @@ from typing import Any, Optional
 
 import torch
 from transformers import PreTrainedTokenizerBase
-from wandb import Table
+try:
+    from wandb import Table
+except ImportError:
+    Table = None
 
 from nemo_rl.data.interfaces import DatumSpec
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict

@@ -30,7 +30,10 @@ import ray
 import torch
 from pydantic import BaseModel
 from transformers import PreTrainedTokenizerBase
-from wandb import Histogram, Table
+try:
+    from wandb import Histogram, Table
+except ImportError:
+    Histogram = Table = None
 
 from nemo_rl.data.interfaces import (
     DatumSpec,
