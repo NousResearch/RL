@@ -162,8 +162,9 @@ def install_moe_expert_routing(model: nn.Module) -> int:
     n = 0
     for mod in model.modules():
         if _looks_like_moe(mod):
-            # EP>1 detection: adapter slots sharded across ranks break global
-            # id indexing. Warn loudly rather than corrupt silently.
+            # Adapter slots sharded across ranks break global id indexing.
+            # This is a known-invalid placement, so fail before any forward
+            # instead of continuing toward a hang or native crash.
             for _, mlls in _expert_mlls(mod):
                 p = mlls[0].lora_A
                 placements = getattr(p, "placements", None)
@@ -171,11 +172,11 @@ def install_moe_expert_routing(model: nn.Module) -> int:
                     getattr(pl, "dim", None) == 0 for pl in placements
                     if pl.__class__.__name__ == "Shard"
                 ):
-                    logger.warning(
-                        "moe expert routing: lora_A sharded on dim 0 "
-                        "(expert-parallel adapter slots). Per-token routing "
-                        "with global ids is NOT valid under EP>1 slot "
-                        "sharding — review before trusting isolation."
+                    raise RuntimeError(
+                        "moe expert routing: lora_A is Shard(0), which shards "
+                        "adapter identity. Per-token routing with global ids "
+                        "is invalid; stacked LoRA parameters must preserve all "
+                        "adapter slots locally and shard dim 1."
                     )
                 break
             if _wrap_moe_module(mod, model):

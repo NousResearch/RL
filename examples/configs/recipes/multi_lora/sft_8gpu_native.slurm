@@ -56,12 +56,19 @@ done
 mkdir -p "${HF_HOME_HOST}"
 
 cp -f "${CFG_ABS}" "${EXP_DIR}/config.yaml"
-# Recipe configs inherit via `defaults: base.yaml` (resolved relative to the
-# config file's own directory). The run executes from the EXP_DIR copy, so the
-# base must travel with it.
+# Resolve inherited config files from the submitted config's source directory.
+# The run executes from EXP_DIR, so copy the whole YAML bundle (not only a
+# hard-coded base.yaml next to the launcher).
 CFG_DIR_SRC="$(dirname -- "${CFG_ABS}")"
-if grep -qE '^defaults:' "${CFG_ABS}" && [[ -f "${CFG_DIR_SRC}/base.yaml" ]]; then
-    cp -f "${CFG_DIR_SRC}/base.yaml" "${EXP_DIR}/base.yaml"
+if grep -qE '^defaults:' "${CFG_ABS}"; then
+    while IFS= read -r parent; do
+        [[ -n "${parent}" ]] || continue
+        [[ -f "${CFG_DIR_SRC}/${parent}" ]] || {
+            echo "ERROR: inherited config missing: ${CFG_DIR_SRC}/${parent}" >&2
+            exit 1
+        }
+        cp -f "${CFG_DIR_SRC}/${parent}" "${EXP_DIR}/${parent}"
+    done < <(sed -nE 's/^defaults:[[:space:]]*(.+)[[:space:]]*$/\1/p' "${CFG_ABS}")
 fi
 
 INNER_CMD="

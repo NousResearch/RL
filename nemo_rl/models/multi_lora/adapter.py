@@ -19,12 +19,113 @@ bit-equivalent to the stock frozen base nn.Linear (LoRA path skipped).
 
 from __future__ import annotations
 
+import hashlib
+import inspect
 import math
 from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+def _shard_dims(param: nn.Parameter) -> list[int]:
+    """Return every DTensor ``Shard`` dimension carried by ``param``."""
+    return [
+        int(placement.dim)
+        for placement in (getattr(param, "placements", None) or ())
+        if placement.__class__.__name__ == "Shard"
+    ]
+
+
+def assert_stacked_lora_fsdp_placement(
+    model: nn.Module,
+    *,
+    require_shard: bool = True,
+) -> int:
+    """Fail closed unless stacked LoRA parameters preserve all adapter slots.
+
+    Call this after FSDP/DTensor parallelization and before exact-init import or
+    the first forward.  ``require_shard=False`` is useful for CPU unit tests;
+    production distributed setup must leave it at the default.
+    """
+    checked = 0
+    representative = None
+    for module_name, module in model.named_modules():
+        if not isinstance(module, MultiLinearLoRA):
+            continue
+        checked += 1
+        for field in ("lora_A", "lora_B"):
+            param = getattr(module, field)
+            global_shape = tuple(param.shape)
+            local = param.to_local() if hasattr(param, "to_local") else param
+            local_shape = tuple(local.shape)
+            shard_dims = _shard_dims(param)
+            prefix = f"{module_name or '<root>'}.{field}"
+            if not global_shape or global_shape[0] != module.n_adapters:
+                raise RuntimeError(
+                    f"Invalid stacked LoRA global shape for {prefix}: "
+                    f"shape={global_shape}, n_adapters={module.n_adapters}"
+                )
+            if not local_shape or local_shape[0] != module.n_adapters:
+                raise RuntimeError(
+                    f"Invalid stacked LoRA local shape for {prefix}: "
+                    f"local_shape={local_shape} drops adapter slots; "
+                    f"n_adapters={module.n_adapters}"
+                )
+            if 0 in shard_dims:
+                raise RuntimeError(
+                    f"Invalid stacked LoRA FSDP placement for {prefix}: "
+                    f"Shard(0) shards adapter identity; placements="
+                    f"{getattr(param, 'placements', None)}"
+                )
+            if require_shard and 1 not in shard_dims:
+                raise RuntimeError(
+                    f"Invalid stacked LoRA FSDP placement for {prefix}: "
+                    f"expected Shard(1), got placements="
+                    f"{getattr(param, 'placements', None)}"
+                )
+            if representative is None:
+                representative = (
+                    prefix,
+                    global_shape,
+                    local_shape,
+                    repr(getattr(param, "placements", None)),
+                )
+
+    if checked == 0:
+        raise RuntimeError(
+            "Multi-LoRA is enabled but no MultiLinearLoRA modules exist after "
+            "model parallelization"
+        )
+
+    source = inspect.getsourcefile(MultiLinearLoRA)
+    with open(source, "rb") as source_file:
+        source_sha256 = hashlib.sha256(source_file.read()).hexdigest()
+    rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+    local_result = {
+        "modules": checked,
+        "representative": representative,
+        "source": source,
+        "sha256": source_sha256,
+    }
+    if torch.distributed.is_initialized():
+        world_size = torch.distributed.get_world_size()
+        gathered: list[object] = [None] * world_size
+        torch.distributed.all_gather_object(gathered, local_result)
+        bad = [item for item in gathered if item != local_result]
+        if bad:
+            raise RuntimeError(
+                "Stacked LoRA FSDP placement/source marker differs across workers: "
+                f"local={local_result}, gathered={gathered}"
+            )
+
+    print(
+        f"MULTILORA_FSDP_PLACEMENT_OK rank={rank} modules={checked} "
+        f"representative={representative} source={source} sha256={source_sha256}",
+        flush=True,
+    )
+    return checked
 
 
 class MultiLinearLoRA(nn.Linear):

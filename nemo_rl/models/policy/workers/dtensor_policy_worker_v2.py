@@ -420,6 +420,18 @@ class DTensorPolicyWorkerV2(AbstractPolicyWorker, ColocatablePolicyInterface):
             self.autocast_enabled,
         ) = model_and_optimizer_state
 
+        # Multi-LoRA's leading parameter dimension is adapter identity.  FSDP
+        # must preserve every slot locally and shard dim 1; otherwise global
+        # routing ids are invalid and the run can hang or crash.  Validate on
+        # every worker before exact-init injection or the first forward.
+        _multi_lora_cfg = self.cfg.get("dtensor_cfg", {}).get("lora_cfg") or {}
+        if int(_multi_lora_cfg.get("n_adapters", 1) or 1) > 1:
+            from nemo_rl.models.multi_lora.adapter import (
+                assert_stacked_lora_fsdp_placement,
+            )
+
+            assert_stacked_lora_fsdp_placement(self.model)
+
         # Exact-init transfer for true single-vs-multi bit-equivalence probes.
         # This must run after model/FSDP/PEFT setup (so local shard layouts are
         # final) and before any forward/backward or optimizer step.  It is

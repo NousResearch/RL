@@ -176,10 +176,7 @@ def seed_microbatch_routing(model: nn.Module, adapter_ids: torch.Tensor):
     """
     handle = install_microbatch_routing_hook(model)
     set_microbatch_routing_full(model, adapter_ids)
-    try:
-        from nemo_rl.models.multi_lora.moe_routing import install_moe_expert_routing
-        install_moe_expert_routing(model)
-    except Exception as e:  # noqa: BLE001 — never break training on install
-        logger.warning("moe expert routing install failed (legacy slot-0 "
-                       "fallback stays active): %s", e)
+    from nemo_rl.models.multi_lora.moe_routing import install_moe_expert_routing
+
+    install_moe_expert_routing(model)
     return handle

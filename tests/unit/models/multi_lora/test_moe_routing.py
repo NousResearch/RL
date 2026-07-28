@@ -101,6 +101,20 @@ def test_install_wraps_moe_modules():
     assert install_moe_expert_routing(model) == 0
 
 
+def test_install_rejects_adapter_axis_sharding():
+    class Shard:
+        def __init__(self, dim):
+            self.dim = dim
+
+    model = ToyModel()
+    first = next(
+        module for module in model.modules() if isinstance(module, MultiLinearLoRA)
+    )
+    first.lora_A.placements = (Shard(0),)
+    with pytest.raises(RuntimeError, match="lora_A is Shard\\(0\\)"):
+        install_moe_expert_routing(model)
+
+
 def test_expert_rows_route_to_owning_adapter():
     """Rows from adapter k must get adapter k's LoRA inside experts —
     the exact guarantee the legacy slot-0 fallback violated."""

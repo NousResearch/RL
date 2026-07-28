@@ -2,10 +2,44 @@
 
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+
 import pytest
 import torch
 
 from nemo_rl.models.multi_lora.sharding import rank_striped_indices
+
+
+def _load_vendored_parallelizer_utils():
+    root = Path(__file__).resolve().parents[4]
+    path = (
+        root
+        / "patches/automodel/"
+        "nemo_automodel_components_distributed_parallelizer_utils.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "vendored_parallelizer_utils", path
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_vendored_placement_policy_honors_dim1_hint():
+    utils = _load_vendored_parallelizer_utils()
+    param = torch.nn.Parameter(torch.empty(4, 8, 16))
+    param._fsdp_shard_dim = 1
+    placement = utils.attr_shard_placement_fn(param)
+    assert placement.__class__.__name__ == "Shard"
+    assert placement.dim == 1
+
+
+def test_vendored_placement_policy_preserves_stock_default():
+    utils = _load_vendored_parallelizer_utils()
+    param = torch.nn.Parameter(torch.empty(8, 16))
+    assert utils.attr_shard_placement_fn(param) is None
 
 
 def test_rank_stripes_equal_adapter_blocks():

@@ -20,14 +20,15 @@ plain torch CPU install — same expectation as upstream test_lora.py.
 
 from __future__ import annotations
 
-import math
-
 import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from nemo_rl.models.multi_lora.adapter import MultiLinearLoRA
+from nemo_rl.models.multi_lora.adapter import (
+    MultiLinearLoRA,
+    assert_stacked_lora_fsdp_placement,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +70,59 @@ def test_init_creates_n_stacked_adapters(base_linear):
     assert mll.lora_B.shape == (5, 32, 4)
     assert isinstance(mll.lora_A, nn.Parameter)
     assert isinstance(mll.lora_B, nn.Parameter)
+
+
+def test_init_marks_stacked_parameters_for_dim1_fsdp_sharding(base_linear):
+    mll = MultiLinearLoRA(base_linear, n_adapters=5, dim=4, alpha=8)
+    assert mll.lora_A._fsdp_shard_dim == 1
+    assert mll.lora_B._fsdp_shard_dim == 1
+
+
+def test_placement_assertion_accepts_unsharded_unit_model(base_linear):
+    model = nn.Sequential(
+        MultiLinearLoRA(base_linear, n_adapters=3, dim=4, alpha=8)
+    )
+    assert assert_stacked_lora_fsdp_placement(model, require_shard=False) == 1
+
+
+def test_placement_assertion_rejects_missing_multi_modules():
+    with pytest.raises(RuntimeError, match="no MultiLinearLoRA modules"):
+        assert_stacked_lora_fsdp_placement(nn.Linear(4, 4), require_shard=False)
+
+
+def test_placement_assertion_rejects_shard0(base_linear):
+    class Shard:
+        def __init__(self, dim):
+            self.dim = dim
+
+    mll = MultiLinearLoRA(base_linear, n_adapters=3, dim=4, alpha=8)
+    mll.lora_A.placements = (Shard(0),)
+    mll.lora_A.to_local = lambda: mll.lora_A
+    with pytest.raises(RuntimeError, match=r"Shard\(0\) shards adapter identity"):
+        assert_stacked_lora_fsdp_placement(mll)
+
+
+def test_placement_assertion_rejects_missing_dim1_shard(base_linear):
+    class Replicate:
+        pass
+
+    mll = MultiLinearLoRA(base_linear, n_adapters=3, dim=4, alpha=8)
+    mll.lora_A.placements = (Replicate(),)
+    mll.lora_A.to_local = lambda: mll.lora_A
+    with pytest.raises(RuntimeError, match=r"expected Shard\(1\)"):
+        assert_stacked_lora_fsdp_placement(mll)
+
+
+def test_placement_assertion_rejects_dropped_local_slots(base_linear):
+    class Shard:
+        def __init__(self, dim):
+            self.dim = dim
+
+    mll = MultiLinearLoRA(base_linear, n_adapters=3, dim=4, alpha=8)
+    mll.lora_A.placements = (Shard(1),)
+    mll.lora_A.to_local = lambda: mll.lora_A[:1]
+    with pytest.raises(RuntimeError, match="drops adapter slots"):
+        assert_stacked_lora_fsdp_placement(mll)
 
 
 def test_init_lora_B_is_zero(mll):
