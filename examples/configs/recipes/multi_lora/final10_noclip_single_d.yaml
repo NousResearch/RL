@@ -1,0 +1,13 @@
+defaults: base.yaml
+run_name: final10_noclip_single_d
+single_dataset: d
+sft:
+  max_num_steps: 10
+  save_freq: 10
+checkpointing:
+  save_period: 10
+policy:
+  train_global_batch_size: 16
+  train_micro_batch_size: 2
+multi_lora:
+  enabled: false

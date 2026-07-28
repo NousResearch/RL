@@ -1,0 +1,7 @@
+defaults: base.yaml
+run_name: detprobe_multi_1
+sft:
+  max_num_steps: 10
+  save_freq: 10
+checkpointing:
+  save_period: 10
