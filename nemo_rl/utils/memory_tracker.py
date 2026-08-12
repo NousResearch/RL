@@ -29,10 +29,14 @@ class MemoryTrackerDataPoint(BaseModel):
 
     @property
     def mem_used_diff_gb(self) -> float:
+        if self.memory_used_after_stage_gb is None:
+            return 0.0
         return self.memory_used_after_stage_gb - self.memory_used_before_stage_gb
 
     @property
     def new_variables(self) -> List[str]:
+        if self.variables_after_stage is None:
+            return []
         return [
             v
             for v in self.variables_after_stage
@@ -41,9 +45,14 @@ class MemoryTrackerDataPoint(BaseModel):
 
     def get_snapshot_str(self) -> str:
         ray_memory_summary = memory_summary(stats_only=True, num_entries=5)
+        mem_after_str = (
+            f"{self.memory_used_after_stage_gb:>7.2f}"
+            if self.memory_used_after_stage_gb is not None
+            else "    N/A"
+        )
         return f"""💭 Driver CPU memory tracker for {self.stage}:
 - Mem usage before                  {self.memory_used_before_stage_gb:>7.2f} GB
-- Mem usage after                   {self.memory_used_after_stage_gb:>7.2f} GB
+- Mem usage after                   {mem_after_str} GB
 - Mem usage diff (after - before)   {self.mem_used_diff_gb:>+7.2f} GB
 - New variables: {self.new_variables}
 
